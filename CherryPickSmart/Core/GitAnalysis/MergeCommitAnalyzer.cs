@@ -148,10 +148,27 @@ public class MergeCommitAnalyzer
             if (!graph.Commits.TryGetValue(targetSha, out var targetCommit))
                 return false;
 
-            // Simple similarity check (replace with your actual logic)
-            return commit.Message == targetCommit.Message &&
-                   commit.Author == targetCommit.Author &&
-                   Math.Abs((commit.Timestamp - targetCommit.Timestamp).TotalHours) < 24;
+            // 1. Check exact message match (likely cherry-picked)
+            if (commit.Message.Trim() == targetCommit.Message.Trim())
+                return true;
+
+            // 2. Check if message contains cherry-pick notation
+            if (targetCommit.Message.Contains($"cherry picked from commit {commitSha.Substring(0, 7)}") ||
+                targetCommit.Message.Contains($"(cherry picked from commit {commitSha})"))
+                return true;
+
+            // 3. Check files and size similarity
+            var fileOverlap = commit.ModifiedFiles.Intersect(targetCommit.ModifiedFiles).Count();
+            var fileSimilarity = commit.ModifiedFiles.Count > 0 
+                ? (double)fileOverlap / Math.Max(commit.ModifiedFiles.Count, targetCommit.ModifiedFiles.Count)
+                : 0;
+            
+            // 4. Similar author and close timestamp (within 7 days for cherry-picks)
+            var sameAuthor = commit.Author == targetCommit.Author;
+            var timeDiff = Math.Abs((commit.Timestamp - targetCommit.Timestamp).TotalDays);
+            
+            // High confidence if files match >80% and same author
+            return fileSimilarity > 0.8 && sameAuthor && timeDiff < 7;
         });
     }
 

@@ -601,36 +601,70 @@ public class ConflictPredictor
         bool targetModified,
         List<ConflictDetail> conflictDetails)
     {
-        var riskScore = 0;
+        var riskScore = 0.0;
 
-        // Base risk for multiple commits on same file
+        // Base risk for multiple commits on same file - more granular
         if (commits.Count > 1)
-            riskScore += commits.Count - 1;
+            riskScore += (commits.Count - 1) * 0.5;
 
-        // Time span risk
+        // Time span risk - more granular
         var timeSpan = commits.Max(c => c.Timestamp) - commits.Min(c => c.Timestamp);
-        if (timeSpan.TotalDays > 7) riskScore += 2;
-        if (timeSpan.TotalDays > 30) riskScore += 1;
+        if (timeSpan.TotalDays > 30) riskScore += 2;
+        else if (timeSpan.TotalDays > 14) riskScore += 1.5;
+        else if (timeSpan.TotalDays > 7) riskScore += 1;
+        else if (timeSpan.TotalDays > 3) riskScore += 0.5;
 
-        // Multiple authors risk
-        var authorCount = commits.Select(c => c.Author).Distinct().Count();
-        if (authorCount > 1) riskScore += authorCount - 1;
+        // Multiple authors risk - consider author overlap
+        var authors = commits.Select(c => c.Author).Distinct().ToList();
+        if (authors.Count > 1) 
+        {
+            riskScore += (authors.Count - 1) * 0.75;
+            
+            // Bonus risk if no common authors (less coordination)
+            var hasCommonAuthor = false;
+            foreach (var author in authors)
+            {
+                if (commits.Count(c => c.Author == author) > 1)
+                {
+                    hasCommonAuthor = true;
+                    break;
+                }
+            }
+            if (!hasCommonAuthor) riskScore += 1;
+        }
 
-        // Target branch modifications
-        if (targetModified) riskScore += 3;
+        // Target branch modifications - major factor
+        if (targetModified) riskScore += 4;
 
-        // Line-level conflicts
-        riskScore += conflictDetails.Count / 2;
+        // Line-level conflicts - weighted by severity
+        riskScore += conflictDetails.Count * 0.3;
 
-        // File type risk
+        // File type specific risks
         var extension = Path.GetExtension(filePath).ToLowerInvariant();
-        if (new[] { ".dll", ".exe", ".pdf" }.Contains(extension))
-            riskScore += 2; // Binary files are risky
+        var fileName = Path.GetFileName(filePath).ToLowerInvariant();
+
+        // Critical files get higher risk
+        if (new[] { "package.json", "pom.xml", ".csproj", ".sln" }.Any(pattern => fileName.EndsWith(pattern)))
+            riskScore += 2;
+
+        // Binary files
+        if (new[] { ".dll", ".exe", ".jar", ".zip", ".pdf" }.Contains(extension))
+            riskScore += 3;
+
+        // Generated files - lower risk
+        if (filePath.Contains("/bin/") || filePath.Contains("/obj/") || filePath.Contains("/target/") || 
+            filePath.Contains("\\bin\\") || filePath.Contains("\\obj\\") || filePath.Contains("\\target\\"))
+            riskScore *= 0.5;
+
+        // Test files - slightly lower risk
+        if (filePath.Contains("/test/") || filePath.Contains("\\test\\") || 
+            fileName.Contains(".test.") || fileName.Contains(".spec."))
+            riskScore *= 0.8;
 
         return riskScore switch
         {
-            >= 8 => ConflictRisk.Certain,
-            >= 5 => ConflictRisk.High,
+            >= 10 => ConflictRisk.Certain,
+            >= 6 => ConflictRisk.High,
             >= 3 => ConflictRisk.Medium,
             _ => ConflictRisk.Low
         };

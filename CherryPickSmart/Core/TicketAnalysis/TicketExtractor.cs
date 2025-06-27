@@ -39,6 +39,27 @@ public class TicketExtractor
                 "HASHTAG",
                 new Regex(@"#(\w{2,10})[\s-]?(\d{1,6})", RegexOptions.Compiled | RegexOptions.IgnoreCase),
                 match => $"{match.Groups[1].Value.ToUpperInvariant()}-{match.Groups[2].Value}"
+            ),
+
+            // Handle tickets in branch names or PR titles
+            new TicketPattern(
+                "BRANCH_STYLE",
+                new Regex(@"(?:feature|bugfix|hotfix|fix|feat|bug|chore)[/_]([A-Z]{2,10})[/_-]?(\d{1,6})", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+                match => $"{match.Groups[1].Value.ToUpperInvariant()}-{match.Groups[2].Value}"
+            ),
+
+            // Common typos/variations with colons or other separators
+            new TicketPattern(
+                "TYPO_VARIATIONS",
+                new Regex(@"([A-Z]{2,10})\s*[:#]\s*(\d{1,6})", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+                match => $"{match.Groups[1].Value.ToUpperInvariant()}-{match.Groups[2].Value}"
+            ),
+
+            // Parentheses style
+            new TicketPattern(
+                "PARENTHESES",
+                new Regex(@"\((\w{2,10})[\s-](\d{1,6})\)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+                match => $"{match.Groups[1].Value.ToUpperInvariant()}-{match.Groups[2].Value}"
             )
         ];
     }

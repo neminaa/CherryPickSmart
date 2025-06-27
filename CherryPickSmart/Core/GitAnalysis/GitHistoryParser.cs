@@ -81,19 +81,26 @@ public class GitHistoryParser
                 // Include the current path
                 modifiedFiles.Add(change.Path);
 
-                // For renamed files, we might want both paths for better matching
+                // For renamed files, track both old and new paths for better conflict detection
                 if (change.Status == ChangeKind.Renamed && !string.IsNullOrEmpty(change.OldPath))
+                {
+                    modifiedFiles.Add(change.OldPath);
+                }
+                
+                // Track deleted files for conflict prediction (important!)
+                if (change.Status == ChangeKind.Deleted && !string.IsNullOrEmpty(change.OldPath))
                 {
                     modifiedFiles.Add(change.OldPath);
                 }
             }
         }
-        catch (LibGit2SharpException)
+        catch (LibGit2SharpException ex)
         {
-            // Handle Git errors gracefully - some commits might have issues
+            // Log the error for debugging but don't fail
+            Console.WriteLine($"Warning: Could not analyze commit {commit.Sha.Substring(0, 7)}: {ex.Message}");
         }
 
-        return modifiedFiles.Distinct().ToList();
+        return modifiedFiles.Distinct().OrderBy(f => f).ToList();
     }
 
     /// <summary>

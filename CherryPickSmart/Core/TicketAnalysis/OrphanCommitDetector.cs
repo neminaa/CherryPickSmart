@@ -104,11 +104,12 @@ public class OrphanCommitDetector
         if (commit.IsMergeCommit)
             return true;
 
-        // Skip automated commits
+        // Enhanced automated commit patterns
         var automatedPatterns = new[]
         {
             "merge branch",
             "merge pull request",
+            "merged pr",
             "bump version",
             "update dependencies",
             "auto-generated",
@@ -116,7 +117,30 @@ public class OrphanCommitDetector
             "ci:",
             "cd:",
             "[automated]",
-            "version bump"
+            "[bot]",
+            "version bump",
+            "prepare release",
+            "update changelog",
+            "regenerate",
+            "ran formatter",
+            "code formatting",
+            "whitespace",
+            "typo fix",
+            "fix typo",
+            "format code",
+            "reformat",
+            "linting",
+            "prettier",
+            "eslint",
+            "rubocop",
+            "auto-format",
+            "[skip ci]",
+            "[ci skip]",
+            "npm audit fix",
+            "yarn upgrade",
+            "bundle update",
+            "dependabot",
+            "renovate"
         };
 
         return automatedPatterns.Any(pattern => message.Contains(pattern));

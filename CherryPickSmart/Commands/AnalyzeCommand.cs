@@ -59,7 +59,7 @@ public class AnalyzeCommand : ICommand
             AnsiConsole.Write(table);
             AnsiConsole.WriteLine();
 
-            AnalysisResult analysisResult = null;
+            AnalysisResult analysisResult;
 
             //AnsiConsole.Status()
             //    .Spinner(Spinner.Known.Dots)
@@ -104,16 +104,15 @@ public class AnalyzeCommand : ICommand
                 ToBranch,
                 graph,
                 ticketMap,
-                mergeAnalyses,
                 orphanCommits,
                 conflictPredictions);
             // Step 7: Display Results
-            await DisplayResults(analysisResult!);
+            await DisplayResults(analysisResult);
 
             // Step 8: Export Results
             if (ShouldExportResults())
             {
-                await ExportResults(analysisResult!);
+                await ExportResults(analysisResult);
             }
 
             AnsiConsole.WriteLine();
@@ -152,7 +151,6 @@ public class AnalyzeCommand : ICommand
         string toBranch,
         CpCommitGraph graph,
         Dictionary<string, List<CpCommit>> ticketMap,
-        List<MergeCommitAnalyzer.MergeAnalysis> mergeAnalyses,
         List<OrphanCommitDetector.OrphanCommit> orphanCommits,
         List<ConflictPrediction> conflictPredictions)
     {
@@ -784,8 +782,110 @@ public class AnalyzeCommand : ICommand
         };
     }
 
-    // Placeholder methods for content generation (implement based on your needs)
-    private TicketPriority DetermineTicketPriority(string key, List<CpCommit> commits) => TicketPriority.Medium;
+    /// <summary>
+    /// Determine ticket priority based on various factors like commit count, file changes, authors, and time span
+    /// </summary>
+    private static TicketPriority DetermineTicketPriority(string key, List<CpCommit> commits)
+    {
+        if (!commits.Any())
+            return TicketPriority.Low;
+
+        // Calculate various metrics
+        var commitCount = commits.Count;
+        var uniqueFiles = commits.SelectMany(c => c.ModifiedFiles).Distinct().Count();
+        var uniqueAuthors = commits.Select(c => c.Author).Distinct().Count();
+        var hasMergeCommits = commits.Any(c => c.IsMergeCommit);
+        
+        // Calculate time span
+        var timeSpan = commits.Max(c => c.Timestamp) - commits.Min(c => c.Timestamp);
+        
+        // Check for critical files
+        var criticalFiles = commits.SelectMany(c => c.ModifiedFiles)
+            .Where(IsCriticalFile)
+            .Distinct()
+            .Count();
+
+        // Priority scoring system
+        var priorityScore = 0;
+
+        // Commit count factor (more commits = higher priority)
+        if (commitCount >= 10) priorityScore += 3;
+        else if (commitCount >= 5) priorityScore += 2;
+        else if (commitCount >= 3) priorityScore += 1;
+
+        // File count factor (more files = higher priority)
+        if (uniqueFiles >= 20) priorityScore += 3;
+        else if (uniqueFiles >= 10) priorityScore += 2;
+        else if (uniqueFiles >= 5) priorityScore += 1;
+
+        // Author count factor (more authors = higher complexity)
+        if (uniqueAuthors >= 3) priorityScore += 2;
+        else if (uniqueAuthors >= 2) priorityScore += 1;
+
+        // Time span factor (longer time = potentially more complex)
+        if (timeSpan.TotalDays >= 30) priorityScore += 2;
+        else if (timeSpan.TotalDays >= 14) priorityScore += 1;
+
+        // Merge commits factor
+        if (hasMergeCommits) priorityScore += 1;
+
+        // Critical files factor (highest weight)
+        if (criticalFiles >= 3) priorityScore += 4;
+        else if (criticalFiles >= 1) priorityScore += 2;
+
+        // Determine priority based on score
+        return priorityScore switch
+        {
+            >= 8 => TicketPriority.High,
+            >= 4 => TicketPriority.Medium,
+            _ => TicketPriority.Low
+        };
+    }
+
+    /// <summary>
+    /// Check if a file is considered critical (e.g., configuration, build files, core business logic)
+    /// </summary>
+    private static bool IsCriticalFile(string filePath)
+    {
+        var fileName = Path.GetFileName(filePath).ToLowerInvariant();
+        var path = filePath.ToLowerInvariant();
+
+        // Critical file patterns
+        var criticalPatterns = new[]
+        {
+            // Build/Config files
+            "package.json", "pom.xml", ".csproj", ".sln", "build.gradle", "webpack.config",
+            "tsconfig.json", "appsettings.json", "web.config", "app.config",
+            
+            // CI/CD files
+            ".yml", ".yaml", "dockerfile", "docker-compose",
+            
+            // Database files
+            ".sql", "migration", "schema",
+            
+            // Security files
+            "security", "auth", "authentication", "authorization"
+        };
+
+        // Critical directories
+        var criticalDirectories = new[]
+        {
+            "/config/", "/configuration/", "/settings/",
+            "/security/", "/auth/", "/authentication/",
+            "/database/", "/db/", "/migrations/",
+            "/core/", "/kernel/", "/framework/"
+        };
+
+        // Check file name patterns
+        if (criticalPatterns.Any(pattern => fileName.Contains(pattern)))
+            return true;
+
+        // Check directory patterns
+        if (criticalDirectories.Any(dir => path.Contains(dir)))
+            return true;
+
+        return false;
+    }
     private static string GenerateHtmlReport(AnalysisResult result)
     {
         // TODO: This should be injected via DI instead of using static

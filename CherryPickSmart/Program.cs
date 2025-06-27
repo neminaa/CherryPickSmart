@@ -29,7 +29,7 @@ static IHostBuilder CreateHostBuilder(string[] args) =>
         {
             // Register all services
             services.AddSingleton<GitHistoryParser>();
-            services.AddSingleton<MergeCommitAnalyzer>();
+            services.AddSingleton<IMergeCommitAnalyzer,MergeCommitAnalyzer>();
             services.AddSingleton<TicketExtractor>();
             services.AddSingleton<OrphanCommitDetector>();
             services.AddSingleton<TicketInferenceEngine>();

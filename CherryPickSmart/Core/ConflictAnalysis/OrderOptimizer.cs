@@ -9,7 +9,7 @@ public class OrderOptimizer
     public List<CherryPickStep> OptimizeOrder(
         List<CpCommit> selectedCommits,
         List<GitAnalysis.MergeCommitAnalyzer.MergeAnalysis> completeMerges,
-        List<ConflictPredictor.ConflictPrediction> conflicts)
+        List<ConflictPrediction> conflicts)
     {
         var steps = new List<CherryPickStep>();
         var processedCommits = new HashSet<string>();

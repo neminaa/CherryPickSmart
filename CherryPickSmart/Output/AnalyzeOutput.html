@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CherryPickSmart Analyze Output</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    h1, h2, h3 { color: #2c3e50; }
+    table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+    th, td { border: 1px solid #ddd; padding: 8px; }
+    th { background-color: #f2f2f2; }
+    tr:nth-child(even) { background-color: #f9f9f9; }
+    .commit-message { font-family: monospace; }
+  </style>
+</head>
+<body>
+  <h1>CherryPickSmart Analyze Output</h1>
+  <h2>Commit Summary</h2>
+  <p>Total commits to cherry-pick: <!--TOTAL_COMMITS--></p>
+  <p>Regular commits: <!--REGULAR_COMMITS--></p>
+  <p>Merge commits: <!--MERGE_COMMITS--></p>
+
+  <h2>Tickets Found (Sample)</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Ticket</th>
+        <th>Commit Count</th>
+      </tr>
+    </thead>
+    <tbody>
+      <!--TICKET_ROWS-->
+    </tbody>
+  </table>
+
+  <h2>Orphaned Commits (Sample)</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Commit SHA</th>
+        <th>Message</th>
+        <th>Reason</th>
+      </tr>
+    </thead>
+    <tbody>
+      <!--ORPHAN_ROWS-->
+    </tbody>
+  </table>
+</body>
+</html>

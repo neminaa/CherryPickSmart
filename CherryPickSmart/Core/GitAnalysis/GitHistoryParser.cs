@@ -1,18 +1,10 @@
 using CherryPickSmart.Models;
 using LibGit2Sharp;
-using Microsoft.Extensions.Logging;
 
 namespace CherryPickSmart.Core.GitAnalysis;
 
 public class GitHistoryParser
 {
-    private readonly ILogger<GitHistoryParser> _logger;
-
-    public GitHistoryParser(ILogger<GitHistoryParser> logger)
-    {
-        _logger = logger;
-    }
-
     public CpCommitGraph ParseHistory(string repositoryPath, string fromBranch, string toBranch)
     {
         using var repo = new Repository(repositoryPath);
@@ -32,16 +24,13 @@ public class GitHistoryParser
             SortBy = CommitSortStrategies.Reverse
         };
 
-        var commits = new Dictionary<string, CherryPickSmart.Models.CpCommit>();
+        var commits = new Dictionary<string, CpCommit>();
         var childrenMap = new Dictionary<string, List<string>>();
 
         foreach (var commit in repo.Commits.QueryBy(filter))
         {
             var sha = commit.Sha;
             var parents = commit.Parents.Select(p => p.Sha).ToList();
-            var timestamp = commit.Author.When.DateTime;
-            var author = commit.Author.Name;
-            var message = commit.Message;
 
             // Collect modified files
             var modifiedFiles = new List<string>();

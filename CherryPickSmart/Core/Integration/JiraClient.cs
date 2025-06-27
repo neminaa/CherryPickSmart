@@ -6,19 +6,9 @@ using Microsoft.Extensions.Logging;
 
 namespace CherryPickSmart.Core.Integration;
 
-public class JiraClient
+public class JiraClient(HttpClient httpClient, ConfigurationService config, ILogger<JiraClient> logger)
 {
-    private readonly HttpClient _httpClient;
-    private readonly ConfigurationService _config;
-    private readonly ILogger<JiraClient> _logger;
     private readonly Dictionary<string, JiraTicket> _cache = new();
-
-    public JiraClient(HttpClient httpClient, ConfigurationService config, ILogger<JiraClient> logger)
-    {
-        _httpClient = httpClient;
-        _config = config;
-        _logger = logger;
-    }
 
     public record JiraTicket
     {
@@ -35,26 +25,26 @@ public class JiraClient
         if (_cache.TryGetValue(ticketKey, out var cached))
             return cached;
 
-        var config = await _config.LoadConfigAsync();
-        if (string.IsNullOrEmpty(config.JiraUrl))
+        var config1 = await config.LoadConfigAsync();
+        if (string.IsNullOrEmpty(config1.JiraUrl))
         {
-            _logger.LogWarning("Jira URL is not configured.");
+            logger.LogWarning("Jira URL is not configured.");
             return null;
         }
 
-        var url = $"{config.JiraUrl}/rest/api/2/issue/{ticketKey}";
+        var url = $"{config1.JiraUrl}/rest/api/2/issue/{ticketKey}";
 
         var request = new HttpRequestMessage(HttpMethod.Get, url);
         var authToken = Convert.ToBase64String(
-            Encoding.ASCII.GetBytes($"{config.JiraUsername}:{config.JiraApiToken}"));
+            Encoding.ASCII.GetBytes($"{config1.JiraUsername}:{config1.JiraApiToken}"));
         request.Headers.Authorization = new AuthenticationHeaderValue("Basic", authToken);
 
         try
         {
-            var response = await _httpClient.SendAsync(request);
+            var response = await httpClient.SendAsync(request);
             if (!response.IsSuccessStatusCode)
             {
-                _logger.LogWarning($"Failed to fetch ticket {ticketKey}. Status code: {response.StatusCode}");
+                logger.LogWarning($"Failed to fetch ticket {ticketKey}. Status code: {response.StatusCode}");
                 return null;
             }
 
@@ -63,7 +53,7 @@ public class JiraClient
 
             if (jiraResponse == null)
             {
-                _logger.LogWarning($"Failed to deserialize Jira response for ticket {ticketKey}.");
+                logger.LogWarning($"Failed to deserialize Jira response for ticket {ticketKey}.");
                 return null;
             }
 
@@ -82,7 +72,7 @@ public class JiraClient
         }
         catch (Exception ex)
         {
-            _logger.LogError($"Error fetching ticket {ticketKey}: {ex.Message}");
+            logger.LogError($"Error fetching ticket {ticketKey}: {ex.Message}");
             return null;
         }
     }
@@ -100,29 +90,29 @@ public class JiraClient
         if (!uncachedKeys.Any())
             return results;
 
-        var config = await _config.LoadConfigAsync();
-        if (string.IsNullOrEmpty(config.JiraUrl))
+        var config1 = await config.LoadConfigAsync();
+        if (string.IsNullOrEmpty(config1.JiraUrl))
         {
-            _logger.LogWarning("Jira URL is not configured.");
+            logger.LogWarning("Jira URL is not configured.");
             return results;
         }
 
         foreach (var batch in uncachedKeys.Chunk(50))
         {
             var jql = $"key in ({string.Join(",", batch)})";
-            var url = $"{config.JiraUrl}/rest/api/2/search?jql={Uri.EscapeDataString(jql)}&fields=summary,status,assignee,priority,labels";
+            var url = $"{config1.JiraUrl}/rest/api/2/search?jql={Uri.EscapeDataString(jql)}&fields=summary,status,assignee,priority,labels";
 
             var request = new HttpRequestMessage(HttpMethod.Get, url);
             var authToken = Convert.ToBase64String(
-                Encoding.ASCII.GetBytes($"{config.JiraUsername}:{config.JiraApiToken}"));
+                Encoding.ASCII.GetBytes($"{config1.JiraUsername}:{config1.JiraApiToken}"));
             request.Headers.Authorization = new AuthenticationHeaderValue("Basic", authToken);
 
             try
             {
-                var response = await _httpClient.SendAsync(request);
+                var response = await httpClient.SendAsync(request);
                 if (!response.IsSuccessStatusCode)
                 {
-                    _logger.LogWarning($"Failed to fetch batch tickets. Status code: {response.StatusCode}");
+                    logger.LogWarning($"Failed to fetch batch tickets. Status code: {response.StatusCode}");
                     continue;
                 }
 
@@ -131,7 +121,7 @@ public class JiraClient
 
                 if (jiraResponse?.Issues == null)
                 {
-                    _logger.LogWarning("Failed to deserialize Jira batch response.");
+                    logger.LogWarning("Failed to deserialize Jira batch response.");
                     continue;
                 }
 
@@ -153,7 +143,7 @@ public class JiraClient
             }
             catch (Exception ex)
             {
-                _logger.LogError($"Error fetching batch tickets: {ex.Message}");
+                logger.LogError($"Error fetching batch tickets: {ex.Message}");
                 continue;
             }
         }

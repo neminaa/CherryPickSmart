@@ -5,15 +5,8 @@ using Microsoft.Extensions.Logging;
 
 namespace CherryPickSmart.Core.Integration;
 
-public class GitCommandExecutor
+public class GitCommandExecutor(ILogger<GitCommandExecutor> logger)
 {
-    private readonly ILogger<GitCommandExecutor> _logger;
-
-    public GitCommandExecutor(ILogger<GitCommandExecutor> logger)
-    {
-        _logger = logger;
-    }
-
     public async Task<string> ExecuteAsync(string command)
     {
         using var process = new Process();
@@ -63,12 +56,12 @@ public class GitCommandExecutor
         }
         catch (RepositoryNotFoundException)
         {
-            _logger.LogWarning($"No Git repository found at path: {repositoryPath}");
+            logger.LogWarning($"No Git repository found at path: {repositoryPath}");
             return false;
         }
         catch (Exception ex)
         {
-            _logger.LogError($"Error checking Git repository: {ex.Message}");
+            logger.LogError($"Error checking Git repository: {ex.Message}");
             return false;
         }
     }
@@ -86,7 +79,7 @@ public class GitCommandExecutor
         }
         catch (Exception ex)
         {
-            _logger.LogError($"Error retrieving commits: {ex.Message}");
+            logger.LogError($"Error retrieving commits: {ex.Message}");
             throw new GitCommandException($"Failed to retrieve commits for branch '{branchName}'.");
         }
     }

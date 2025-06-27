@@ -1,5 +1,7 @@
+using CherryPickSmart.Core.ConflictAnalysis;
 using CherryPickSmart.Core.GitAnalysis;
 using CherryPickSmart.Core.TicketAnalysis;
+using CherryPickSmart.Models;
 using CommandLine;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -25,6 +27,7 @@ public class AnalyzeCommand : ICommand
         var parser = services.GetRequiredService<GitHistoryParser>();
         var mergeAnalyzer = services.GetRequiredService<MergeCommitAnalyzer>();
         var ticketExtractor = services.GetRequiredService<TicketExtractor>();
+        var optimizer = services.GetRequiredService<OrderOptimizer>();
 
         Console.WriteLine($"Analyzing commits from {FromBranch} to {ToBranch} in repository {RepositoryPath}...");
         var graph = parser.ParseHistory(RepositoryPath, FromBranch, ToBranch);
@@ -64,6 +67,37 @@ public class AnalyzeCommand : ICommand
                 Console.WriteLine($"    Reason: {orphan.Reason}");
             }
         }
+        // after you’ve built the AnalysisResult model...
+        var conflictPredictor = services.GetRequiredService<ConflictPredictor>();
+        var conflictPredictions = conflictPredictor.PredictConflicts(graph.Commits.Values.ToList(), new HashSet<string>(targetCommits));
+
+        // Fix argument types for Build method call by passing correct parameters
+        // The error suggests that the arguments passed are mismatched, so we need to ensure
+        // that the parameters match the Build method signature exactly.
+
+        // The Build method expects:
+        // (string fromBranch, string toBranch, CpCommitGraph commitGraph,
+        // Dictionary<string, List<CpCommit>> ticketMap,
+        // List<MergeCommitAnalyzer.MergeAnalysis> mergeAnalyses,
+        // List<ConflictPredictor.ConflictPrediction> conflictPredictions,
+        // OrderOptimizer optimizer)
+
+        // The variables graph, ticketMap, mergeAnalyses, conflictPredictions, optimizer are correct types.
+
+        var analysisResult = AnalysisResultBuilder.Build(
+            FromBranch,
+            ToBranch,
+            graph,
+            ticketMap,
+            mergeAnalyses,
+            conflictPredictions,
+            optimizer
+        );
+
+        var generator = new ReportGenerator("Templates/Report.html.scriban");
+        var outputFile = Path.Combine(Directory.GetCurrentDirectory(), "CherryPickReport.html");
+        generator.Generate(analysisResult, outputFile);
+        Console.WriteLine($"HTML report generated at: {outputFile}");
 
         return Task.FromResult(0);
     }

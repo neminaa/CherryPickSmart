@@ -17,7 +17,8 @@ public record CpCommit
     public List<string> ExtractedTickets { get; set; } = [];
     public string? InferredTicket { get; set; }
     public double InferenceConfidence { get; set; }
-    
+
+    public bool IsOrpahan => ExtractedTickets.Count == 0;
     public Commit Commit { get; init; }
 
     public CpCommit(Commit commit, List<string>? modifiedFiles = null)

@@ -1,9 +1,5 @@
 ﻿using CherryPickSmart.Commands;
-using CherryPickSmart.Core.ConflictAnalysis;
-using CherryPickSmart.Core.GitAnalysis;
-using CherryPickSmart.Core.Integration;
-using CherryPickSmart.Core.TicketAnalysis;
-using CherryPickSmart.Services;
+using CherryPickSmart.Infrastructure.DependencyInjection;
 using CommandLine;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -28,17 +24,8 @@ static IHostBuilder CreateHostBuilder(string[] args) =>
     Host.CreateDefaultBuilder(args)
         .ConfigureServices((_, services) =>
         {
-            // Register all services
-            services.AddSingleton<GitHistoryParser>();
-            services.AddSingleton<MergeCommitAnalyzer>();
-            services.AddSingleton<OrderOptimizer>();
-            services.AddSingleton<ConflictPredictor>();
-            services.AddSingleton<TicketExtractor>();
-            services.AddSingleton<OrphanCommitDetector>();
-            services.AddSingleton<TicketInferenceEngine>();
-            services.AddSingleton<JiraClient>();
-            services.AddSingleton<ConfigurationService>();
-            services.AddSingleton<GitCommandExecutor>();
+            // Register all services using extension method
+            services.AddCherryPickSmartServices();
         });
 
 static async Task<int> RunCommandAsync<TCommand>(IHost host, TCommand command)

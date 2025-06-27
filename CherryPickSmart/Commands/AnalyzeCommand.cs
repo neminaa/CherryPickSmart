@@ -788,7 +788,9 @@ public class AnalyzeCommand : ICommand
     private TicketPriority DetermineTicketPriority(string key, List<CpCommit> commits) => TicketPriority.Medium;
     private static string GenerateHtmlReport(AnalysisResult result)
     {
-        return HtmlReportGenerator.GenerateHtmlReport(result);
+        // TODO: This should be injected via DI instead of using static
+        var reportGenerator = new ReportGenerator();
+        return reportGenerator.GenerateHtmlReport(result);
     }
 
     private string GenerateBashScript(AnalysisResult result) => "#!/bin/bash\necho 'Cherry-pick script'";

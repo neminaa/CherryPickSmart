@@ -1,14 +1,15 @@
 ﻿using CherryPickSmart.Models;
+using CherryPickSmart.Services.Interfaces;
 using Scriban;
 
 namespace CherryPickSmart.Services
 {
-    public static class HtmlReportGenerator
+    public class ReportGenerator : IReportGenerator
     {
         /// <summary>
         /// Generate comprehensive HTML report from AnalysisResult
         /// </summary>
-        public static string GenerateHtmlReport(AnalysisResult result)
+        public string GenerateHtmlReport(AnalysisResult result)
         {
             try
             {
@@ -43,7 +44,7 @@ namespace CherryPickSmart.Services
         /// <summary>
         /// Convert AnalysisResult to Scriban-friendly object with proper naming
         /// </summary>
-        private static object CreateTemplateData(AnalysisResult result)
+        private object CreateTemplateData(AnalysisResult result)
         {
             return new
             {
@@ -159,7 +160,7 @@ namespace CherryPickSmart.Services
         /// <summary>
         /// Format commit for template consumption
         /// </summary>
-        private static object FormatCommit(CpCommit commit)
+        private object FormatCommit(CpCommit commit)
         {
             return new
             {
@@ -176,7 +177,7 @@ namespace CherryPickSmart.Services
         /// <summary>
         /// Truncate commit message for display
         /// </summary>
-        private static string TruncateMessage(string message)
+        private string TruncateMessage(string message)
         {
             if (string.IsNullOrEmpty(message))
                 return "";
@@ -191,7 +192,7 @@ namespace CherryPickSmart.Services
         /// <summary>
         /// Save HTML report to file with error handling
         /// </summary>
-        public static async Task<string> SaveHtmlReportAsync(AnalysisResult result, string? outputDirectory = null)
+        public async Task<string> SaveHtmlReportAsync(AnalysisResult result, string? outputDirectory = null)
         {
             try
             {
@@ -218,7 +219,7 @@ namespace CherryPickSmart.Services
         /// <summary>
         /// Generate and save report in one step
         /// </summary>
-        public static async Task<string> GenerateAndSaveReportAsync(AnalysisResult result, string? outputDirectory = null)
+        public async Task<string> GenerateAndSaveReportAsync(AnalysisResult result, string? outputDirectory = null)
         {
             var filePath = await SaveHtmlReportAsync(result, outputDirectory);
 

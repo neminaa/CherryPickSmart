@@ -1,0 +1,92 @@
+using CherryPickSmart.Models;
+using LibGit2Sharp;
+using Microsoft.Extensions.Logging;
+
+namespace CherryPickSmart.Core.GitAnalysis;
+
+public class GitHistoryParser
+{
+    private readonly ILogger<GitHistoryParser> _logger;
+
+    public GitHistoryParser(ILogger<GitHistoryParser> logger)
+    {
+        _logger = logger;
+    }
+
+    public CommitGraph ParseHistory(string repositoryPath, string fromBranch, string toBranch)
+    {
+        using var repo = new Repository(repositoryPath);
+
+        var fromBranchRef = repo.Branches[fromBranch]?.Tip;
+        var toBranchRef = repo.Branches[toBranch]?.Tip;
+
+        if (fromBranchRef == null || toBranchRef == null)
+        {
+            throw new ArgumentException($"Branches '{fromBranch}' or '{toBranch}' not found in the repository.");
+        }
+
+        var filter = new CommitFilter
+        {
+            IncludeReachableFrom = fromBranchRef,
+            ExcludeReachableFrom = toBranchRef,
+            SortBy = CommitSortStrategies.Reverse
+        };
+
+        var commits = new Dictionary<string, CherryPickSmart.Models.Commit>();
+        var childrenMap = new Dictionary<string, List<string>>();
+
+        foreach (var commit in repo.Commits.QueryBy(filter))
+        {
+            var sha = commit.Sha;
+            var parents = commit.Parents.Select(p => p.Sha).ToList();
+            var timestamp = commit.Author.When.DateTime;
+            var author = commit.Author.Name;
+            var message = commit.Message;
+
+            // Collect modified files
+            var modifiedFiles = new List<string>();
+            foreach (var entry in commit.Tree)
+            {
+                modifiedFiles.Add(entry.Path);
+            }
+
+            commits[sha] = new CherryPickSmart.Models.Commit
+            {
+                Sha = sha,
+                ParentShas = parents,
+                Timestamp = timestamp,
+                Author = author,
+                Message = message,
+                ModifiedFiles = modifiedFiles
+            };
+
+            foreach (var parent in parents)
+            {
+                if (!childrenMap.ContainsKey(parent))
+                    childrenMap[parent] = new();
+                childrenMap[parent].Add(sha);
+            }
+        }
+
+        return new CommitGraph
+        {
+            Commits = commits,
+            ChildrenMap = childrenMap,
+            FromBranch = fromBranch,
+            ToBranch = toBranch
+        };
+    }
+
+    public HashSet<string> GetCommitsInBranch(string repositoryPath, string branchName)
+    {
+        using var repo = new Repository(repositoryPath);
+
+        var branch = repo.Branches[branchName];
+        if (branch == null)
+        {
+            throw new ArgumentException($"Branch '{branchName}' not found in the repository.");
+        }
+
+        return branch.Commits.Select(c => c.Sha).ToHashSet();
+    }
+}

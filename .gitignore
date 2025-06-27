@@ -1,0 +1,46 @@
+# Ignore build output
+bin/
+obj/
+
+# Ignore user-specific files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Ignore Visual Studio Code settings
+.vscode/
+
+# Ignore NuGet packages
+*.nupkg
+packages/
+
+# Ignore logs and temporary files
+*.log
+*.tmp
+*.temp
+
+# Ignore Rider IDE files
+.idea/
+
+# Ignore dotnet watch files
+.dotnet/
+
+# Ignore JetBrains Rider files
+.idea/
+
+# Ignore Resharper files
+_ReSharper*/
+
+# Ignore test results
+TestResults/
+
+# Ignore coverage files
+coverage/
+
+# Ignore config files with secrets
+*.config
+*.json
+
+# Ignore local secrets
+secrets.json

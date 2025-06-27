@@ -7,7 +7,7 @@ public class ConflictPredictor
     public record ConflictPrediction
     {
         public string File { get; init; } = "";
-        public List<Commit> ConflictingCommits { get; init; } = new();
+        public List<CpCommit> ConflictingCommits { get; init; } = [];
         public ConflictRisk Risk { get; init; }
         public string Description { get; init; } = "";
     }
@@ -15,18 +15,18 @@ public class ConflictPredictor
     public enum ConflictRisk { Low, Medium, High, Certain }
 
     public List<ConflictPrediction> PredictConflicts(
-        List<Commit> commitsToCherry,
+        List<CpCommit> commitsToCherry,
         HashSet<string> targetBranchCommits)
     {
         var predictions = new List<ConflictPrediction>();
 
-        var fileCommitMap = new Dictionary<string, List<Commit>>();
+        var fileCommitMap = new Dictionary<string, List<CpCommit>>();
         foreach (var commit in commitsToCherry)
         {
             foreach (var file in commit.ModifiedFiles)
             {
                 if (!fileCommitMap.ContainsKey(file))
-                    fileCommitMap[file] = new();
+                    fileCommitMap[file] = [];
                 fileCommitMap[file].Add(commit);
             }
         }
@@ -52,7 +52,7 @@ public class ConflictPredictor
 
     private ConflictRisk CalculateConflictRisk(
         string file, 
-        List<Commit> commits, 
+        List<CpCommit> commits, 
         HashSet<string> targetBranchCommits)
     {
         var timeSpan = commits.Max(c => c.Timestamp) - commits.Min(c => c.Timestamp);
@@ -80,7 +80,7 @@ public class ConflictPredictor
         return targetBranchCommits.Contains(file);
     }
 
-    private string GenerateRiskDescription(string file, List<Commit> commits, ConflictRisk risk)
+    private string GenerateRiskDescription(string file, List<CpCommit> commits, ConflictRisk risk)
     {
         var authors = string.Join(", ", commits.Select(c => c.Author).Distinct());
         var timeSpan = commits.Max(c => c.Timestamp) - commits.Min(c => c.Timestamp);

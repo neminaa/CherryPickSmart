@@ -1,4 +1,3 @@
-using System.Text.Json;
 using CherryPickSmart.Core.ConflictAnalysis;
 using CherryPickSmart.Core.GitAnalysis;
 using CherryPickSmart.Core.Integration;
@@ -6,8 +5,10 @@ using CherryPickSmart.Core.TicketAnalysis;
 using CherryPickSmart.Models;
 using CherryPickSmart.Services;
 using CommandLine;
+using LibGit2Sharp;
 using Microsoft.Extensions.DependencyInjection;
 using Spectre.Console;
+using System.Text.Json;
 using static CherryPickSmart.Core.ConflictAnalysis.ConflictPredictor;
 
 namespace CherryPickSmart.Commands;
@@ -100,26 +101,27 @@ public class PlanCommand : ICommand
         AnsiConsole.Write(table);
     }
 
-    private List<Commit> GetCommitsForTickets(
-        IEnumerable<string> selectedTickets,
-        Dictionary<string, List<string>> ticketMap,
-        Dictionary<string, string> orphanAssignments)
+    private List<CpCommit> GetCommitsForTickets(
+        List<string> selectedTickets,
+        Dictionary<string, List<CpCommit>> ticketMap,
+        Dictionary<CpCommit, string> orphanAssignments)
     {
-        var selectedCommits = new List<Commit>();
+        var selectedCommits = new List<CpCommit>();
 
-        foreach (var ticket in selectedTickets)
+        var tickets = selectedTickets.ToArray();
+        foreach (var ticket in tickets)
         {
             if (ticketMap.TryGetValue(ticket, out var commitShas))
             {
-                selectedCommits.AddRange(commitShas.Select(sha => new Commit { Sha = sha }));
+                selectedCommits.AddRange(commitShas);
             }
         }
 
         foreach (var (orphanSha, assignedTicket) in orphanAssignments)
         {
-            if (selectedTickets.Contains(assignedTicket))
+            if (tickets.Contains(assignedTicket))
             {
-                selectedCommits.Add(new Commit { Sha = orphanSha });
+                selectedCommits.Add(orphanSha);
             }
         }
 

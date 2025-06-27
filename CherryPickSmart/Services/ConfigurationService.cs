@@ -14,7 +14,7 @@ public class ConfigurationService
         public string? JiraUrl { get; init; }
         public string? JiraUsername { get; init; }
         public string? JiraApiToken { get; init; }
-        public List<string> TicketPrefixes { get; init; } = new() { "HSAMED" };
+        public List<string> TicketPrefixes { get; init; } = ["HSAMED"];
         public string DefaultFromBranch { get; init; } = "deploy/dev";
         public string DefaultToBranch { get; init; } = "deploy/uat";
     }

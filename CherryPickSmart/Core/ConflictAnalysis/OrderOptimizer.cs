@@ -7,7 +7,7 @@ namespace CherryPickSmart.Core.ConflictAnalysis;
 public class OrderOptimizer
 {
     public List<CherryPickStep> OptimizeOrder(
-        List<Commit> selectedCommits,
+        List<CpCommit> selectedCommits,
         List<GitAnalysis.MergeCommitAnalyzer.MergeAnalysis> completeMerges,
         List<ConflictPredictor.ConflictPrediction> conflicts)
     {
@@ -25,7 +25,7 @@ public class OrderOptimizer
                 steps.Add(new CherryPickStep
                 {
                     Type = StepType.MergeCommit,
-                    CommitShas = new List<string> { merge.MergeSha },
+                    CommitShas = [merge.MergeSha],
                     Description = $"Preserve merge {merge.MergeSha[..8]} with {mergeCommitShas.Count} commits",
                     GitCommand = $"git cherry-pick -m 1 {merge.MergeSha}"
                 });
@@ -53,7 +53,7 @@ public class OrderOptimizer
                     steps.Add(new CherryPickStep
                     {
                         Type = StepType.SingleCommit,
-                        CommitShas = new List<string> { range[0].Sha },
+                        CommitShas = [range[0].Sha],
                         Description = $"{group.Key}: {range[0].Message.Truncate(50)}",
                         GitCommand = $"git cherry-pick {range[0].Sha}"
                     });
@@ -74,25 +74,25 @@ public class OrderOptimizer
         return steps;
     }
 
-    private List<IGrouping<string, Commit>> OrderTicketsByDependencyAndConflict(
-        List<IGrouping<string, Commit>> ticketGroups,
+    private List<IGrouping<string, CpCommit>> OrderTicketsByDependencyAndConflict(
+        List<IGrouping<string, CpCommit>> ticketGroups,
         List<ConflictPrediction> conflicts)
     {
         // Placeholder for ordering tickets by dependency and conflict
         return ticketGroups.OrderBy(g => g.Key).ToList();
     }
 
-    private List<List<Commit>> FindConsecutiveRanges(List<Commit> commits)
+    private List<List<CpCommit>> FindConsecutiveRanges(List<CpCommit> commits)
     {
         // Placeholder for finding consecutive ranges of commits
-        return commits.Select(c => new List<Commit> { c }).ToList();
+        return commits.Select(c => new List<CpCommit> { c }).ToList();
     }
 }
 
 public record CherryPickStep
 {
     public StepType Type { get; init; }
-    public List<string> CommitShas { get; init; } = new();
+    public List<string> CommitShas { get; init; } = [];
     public string Description { get; init; } = "";
     public string GitCommand { get; init; } = "";
 }

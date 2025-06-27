@@ -1,7 +1,6 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
-using CherryPickSmart.Core.Integration;
 using CherryPickSmart.Services;
 using Microsoft.Extensions.Logging;
 
@@ -28,7 +27,7 @@ public class JiraClient
         public string Status { get; init; } = "";
         public string? Assignee { get; init; }
         public string Priority { get; init; } = "";
-        public List<string> Labels { get; init; } = new();
+        public List<string> Labels { get; init; } = [];
     }
 
     public async Task<JiraTicket?> GetTicketAsync(string ticketKey)
@@ -75,7 +74,7 @@ public class JiraClient
                 Status = jiraResponse.Fields.Status.Name,
                 Assignee = jiraResponse.Fields.Assignee?.DisplayName,
                 Priority = jiraResponse.Fields.Priority?.Name ?? "Medium",
-                Labels = jiraResponse.Fields.Labels ?? new()
+                Labels = jiraResponse.Fields.Labels ?? []
             };
 
             _cache[ticketKey] = ticket;
@@ -145,7 +144,7 @@ public class JiraClient
                         Status = issue.Fields.Status.Name,
                         Assignee = issue.Fields.Assignee?.DisplayName,
                         Priority = issue.Fields.Priority?.Name ?? "Medium",
-                        Labels = issue.Fields.Labels ?? new()
+                        Labels = issue.Fields.Labels ?? []
                     };
 
                     results[ticket.Key] = ticket;
@@ -170,7 +169,7 @@ public class JiraClient
 
     private record JiraApiSearchResponse
     {
-        public List<JiraApiResponse> Issues { get; init; } = new();
+        public List<JiraApiResponse> Issues { get; init; } = [];
     }
 
     private record JiraFields

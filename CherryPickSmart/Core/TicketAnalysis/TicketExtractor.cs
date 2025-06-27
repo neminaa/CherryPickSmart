@@ -5,12 +5,12 @@ namespace CherryPickSmart.Core.TicketAnalysis;
 
 public class TicketExtractor
 {
-    private readonly List<TicketPattern> _patterns = new()
-    {
-        new(@"([A-Z]{2,10}-\d{1,6})", "JIRA_STANDARD"),        // HSAMED-1234
-        new(@"(?i)(\w{2,10})[\s-](\d{1,6})", "FLEXIBLE"),     // hsamed 1234, hsamed-1234
-        new(@"\[(\w{2,10})[\s-](\d{1,6})\]", "BRACKETED"),    // [hsamed 1234]
-    };
+    private readonly List<TicketPattern> _patterns =
+    [
+        new(@"([A-Z]{2,10}-\d{1,6})", "JIRA_STANDARD"), // HSAMED-1234
+        new(@"(?i)(\w{2,10})[\s-](\d{1,6})", "FLEXIBLE"), // hsamed 1234, hsamed-1234
+        new(@"\[(\w{2,10})[\s-](\d{1,6})\]", "BRACKETED") // [hsamed 1234]
+    ];
 
     public record TicketPattern(string Regex, string Name);
 
@@ -18,7 +18,7 @@ public class TicketExtractor
 
     public TicketExtractor(List<string>? validPrefixes = null)
     {
-        _validPrefixes = validPrefixes ?? new List<string> { "HSAMED" };
+        _validPrefixes = validPrefixes ?? ["HSAMED"];
     }
 
     public List<string> ExtractTickets(string text)
@@ -65,9 +65,9 @@ public class TicketExtractor
         return _validPrefixes.Contains(prefix);
     }
 
-    public Dictionary<string, List<string>> BuildTicketCommitMap(CommitGraph graph)
+    public Dictionary<string, List<CpCommit>> BuildTicketCommitMap(CpCommitGraph graph)
     {
-        var ticketToCommits = new Dictionary<string, List<string>>();
+        var ticketToCommits = new Dictionary<string, List<CpCommit>>();
 
         foreach (var (sha, commit) in graph.Commits)
         {
@@ -76,9 +76,9 @@ public class TicketExtractor
             foreach (var ticket in messageTickets)
             {
                 if (!ticketToCommits.ContainsKey(ticket))
-                    ticketToCommits[ticket] = new();
+                    ticketToCommits[ticket] = [];
 
-                ticketToCommits[ticket].Add(sha);
+                ticketToCommits[ticket].Add(commit);
                 commit.ExtractedTickets.Add(ticket);
             }
         }

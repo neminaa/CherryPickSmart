@@ -1,6 +1,5 @@
 using CherryPickSmart.Models;
 using CherryPickSmart.Core.GitAnalysis;
-using CherryPickSmart.Core.TicketAnalysis;
 using static CherryPickSmart.Core.TicketAnalysis.OrphanCommitDetector;
 
 namespace CherryPickSmart.Core.TicketAnalysis;
@@ -9,29 +8,28 @@ public class TicketInferenceEngine
 {
     public Task<List<TicketSuggestion>> GenerateSuggestionsAsync(
         OrphanCommit orphan,
-        CommitGraph graph,
-        Dictionary<string, List<string>> ticketCommitMap)
+        CpCommitGraph graph,
+        Dictionary<string, List<CpCommit>> ticketCommitMap)
     {
         var suggestions = new List<TicketSuggestion>();
 
-        suggestions.AddRange(AnalyzeMergeContextAsync(orphan, graph, ticketCommitMap).Result);
-        suggestions.AddRange(AnalyzeTemporalClusteringAsync(orphan, graph, ticketCommitMap).Result);
+        suggestions.AddRange(AnalyzeMergeContextAsync(orphan, graph).Result);
+        suggestions.AddRange(AnalyzeTemporalClusteringAsync(orphan, graph).Result);
         suggestions.AddRange(AnalyzeFileOverlapAsync(orphan, graph, ticketCommitMap).Result);
 
         return Task.FromResult(RankSuggestions(suggestions));
     }
 
-    private Task<List<TicketSuggestion>> AnalyzeMergeContextAsync(
+    private static Task<List<TicketSuggestion>> AnalyzeMergeContextAsync(
         OrphanCommit orphan,
-        CommitGraph graph,
-        Dictionary<string, List<string>> ticketCommitMap)
+        CpCommitGraph graph)
     {
         var suggestions = new List<TicketSuggestion>();
 
         foreach (var (mergeSha, merge) in graph.Commits.Where(c => c.Value.IsMergeCommit))
         {
             var mergeAnalyzer = new MergeCommitAnalyzer();
-            var analysis = mergeAnalyzer.AnalyzeMerges(graph, new HashSet<string>());
+            var analysis = mergeAnalyzer.AnalyzeMerges(graph, []);
 
             var mergeAnalysis = analysis.FirstOrDefault(a => a.MergeSha == mergeSha);
             if (mergeAnalysis?.IntroducedCommits.Contains(orphan.Commit.Sha) == true)
@@ -68,10 +66,9 @@ public class TicketInferenceEngine
         return Task.FromResult(suggestions);
     }
 
-    private Task<List<TicketSuggestion>> AnalyzeTemporalClusteringAsync(
+    private static Task<List<TicketSuggestion>> AnalyzeTemporalClusteringAsync(
         OrphanCommit orphan,
-        CommitGraph graph,
-        Dictionary<string, List<string>> ticketCommitMap)
+        CpCommitGraph graph)
     {
         var suggestions = new List<TicketSuggestion>();
         var timeWindow = TimeSpan.FromHours(4);
@@ -111,8 +108,8 @@ public class TicketInferenceEngine
 
     private Task<List<TicketSuggestion>> AnalyzeFileOverlapAsync(
         OrphanCommit orphan,
-        CommitGraph graph,
-        Dictionary<string, List<string>> ticketCommitMap)
+        CpCommitGraph graph,
+        Dictionary<string, List<CpCommit>> ticketCommitMap)
     {
         var suggestions = new List<TicketSuggestion>();
 
@@ -122,9 +119,9 @@ public class TicketInferenceEngine
         {
             var overlappingFiles = new HashSet<string>();
 
-            foreach (var sha in commitShas)
+            foreach (var cpCommit in commitShas)
             {
-                if (graph.Commits.TryGetValue(sha, out var commit))
+                if (graph.Commits.TryGetValue(cpCommit.Sha, out var commit))
                 {
                     var commonFiles = commit.ModifiedFiles.Intersect(orphan.Commit.ModifiedFiles);
                     overlappingFiles.UnionWith(commonFiles);

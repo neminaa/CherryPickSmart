@@ -10,6 +10,7 @@ obj/
 
 # Ignore Visual Studio Code settings
 .vscode/
+.vs/
 
 # Ignore NuGet packages
 *.nupkg
@@ -44,3 +45,4 @@ coverage/
 
 # Ignore local secrets
 secrets.json
+.vs/gp/CopilotIndices/17.14.698.11175/CodeChunks.db

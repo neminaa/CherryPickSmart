@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>CherryPickSmart Report</title>
+  <style>
+    body { font-family: sans-serif; }
+    .ticket-section { margin-bottom: 2em; }
+    .ticket-header { background: #e3f2fd; padding: .5em; border-radius: 4px; }
+    .subsection { margin-top: 1em; }
+    .merge-item { background: #f1f8e9; padding: .5em; margin: .25em 0; border-left: 4px solid #8bc34a; }
+    .last-item  { background: #fff3e0; padding: .5em; margin: .25em 0; border-left: 4px solid #ff9800; }
+    .other-item { margin: .25em 0; }
+    .pick-order { background: #e8eaf6; padding: .5em; border-left: 4px solid #3f51b5; }
+  </style>
+</head>
+<body>
+  <h1>CherryPickSmart Analysis Report</h1>
+  <p>From <strong>{{ analysis.FromBranch }}</strong> to <strong>{{ analysis.ToBranch }}</strong></p>
+
+  {{ for t in analysis.Tickets }}
+    <div class="ticket-section">
+      <h2 class="ticket-header">Ticket: {{ t.Number }}</h2>
+
+      <div class="subsection">
+        <h3>Pick Order</h3>
+        {{ if t.PickOrder.size > 0 }}
+          <ol>
+            {{ for c in t.PickOrder }}
+              <li class="pick-order"><strong>{{ c.ShortSha }}</strong>: {{ c.Message }}</li>
+            {{ end }}
+          </ol>
+        {{ else }}
+          <p>No pick order defined.</p>
+        {{ end }}
+      </div>
+
+      <div class="subsection">
+        <h3>Merge Commits</h3>
+        {{ if t.MergeCommits.size > 0 }}
+          {{ for c in t.MergeCommits }}
+            <div class="merge-item">
+              <strong>{{ c.ShortSha }}</strong>: {{ c.Message }}
+            </div>
+          {{ end }}
+        {{ else }}
+          <p>No merge commits for this ticket.</p>
+        {{ end }}
+      </div>
+
+      <div class="subsection">
+        <h3>Last Commits</h3>
+        {{ if t.LastCommits.size > 0 }}
+          {{ for c in t.LastCommits }}
+            <div class="last-item">
+              <strong>{{ c.ShortSha }}</strong>: {{ c.Message }}
+            </div>
+          {{ end }}
+        {{ else }}
+          <p>No final commits for this ticket.</p>
+        {{ end }}
+      </div>
+
+      <div class="subsection">
+        <h3>Other Commits</h3>
+        {{ if t.OtherCommits.size > 0 }}
+          {{ for c in t.OtherCommits }}
+            <div class="other-item">
+              <strong>{{ c.ShortSha }}</strong>: {{ c.Message }}
+            </div>
+          {{ end }}
+        {{ else }}
+          <p>All commits are categorized above.</p>
+        {{ end }}
+      </div>
+    </div>
+  {{ end }}
+
+  <h2>Orphaned Commits (No Ticket)</h2>
+  {{ if analysis.Orphans.size > 0 }}
+    <ul>
+    {{ for o in analysis.Orphans }}
+      <li>{{ o.ShortSha }} – {{ o.Message }}</li>
+    {{ end }}
+    </ul>
+  {{ else }}
+    <p>No orphans detected.</p>
+  {{ end }}
+</body>
+</html>

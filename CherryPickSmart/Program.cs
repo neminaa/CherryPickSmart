@@ -1,6 +1,4 @@
-﻿using System;
-using System.Threading.Tasks;
-using CherryPickSmart.Commands;
+﻿using CherryPickSmart.Commands;
 using CherryPickSmart.Core.GitAnalysis;
 using CherryPickSmart.Core.Integration;
 using CherryPickSmart.Core.TicketAnalysis;

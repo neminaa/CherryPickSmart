@@ -2,17 +2,17 @@ using CherryPickSmart.Models;
 
 namespace CherryPickSmart.Core.GitAnalysis;
 
-public class MergeCommitAnalyzer
+public class MergeCommitAnalyzer : IMergeCommitAnalyzer
 {
     public record MergeAnalysis
     {
         public string MergeSha { get; init; } = "";
-        public HashSet<string> IntroducedCommits { get; init; } = new();
+        public HashSet<string> IntroducedCommits { get; init; } = [];
         public bool IsCompleteInTarget { get; init; }
-        public List<string> MissingCommits { get; init; } = new();
+        public List<string> MissingCommits { get; init; } = [];
     }
 
-    public List<MergeAnalysis> AnalyzeMerges(CommitGraph graph, HashSet<string> targetBranchCommits)
+    public List<MergeAnalysis> AnalyzeMerges(CpCommitGraph graph, HashSet<string> targetBranchCommits)
     {
         var mergeAnalyses = new List<MergeAnalysis>();
 
@@ -25,7 +25,7 @@ public class MergeCommitAnalyzer
             var mergeDescendants = GetDescendants(graph, merge.Sha);
             var firstParentDescendants = merge.ParentShas.Any()
                 ? GetDescendants(graph, merge.ParentShas[0], firstParentOnly: true)
-                : new HashSet<string>();
+                : [];
 
             var introducedCommits = mergeDescendants.Except(firstParentDescendants).ToHashSet();
 
@@ -45,7 +45,7 @@ public class MergeCommitAnalyzer
         return mergeAnalyses;
     }
 
-    private HashSet<string> GetDescendants(CommitGraph graph, string startSha, bool firstParentOnly = false)
+    private HashSet<string> GetDescendants(CpCommitGraph graph, string startSha, bool firstParentOnly = false)
     {
         var descendants = new HashSet<string>();
         var queue = new Queue<string>();
@@ -79,5 +79,25 @@ public class MergeCommitAnalyzer
         }
 
         return descendants;
+    }
+
+    public List<CpCommit> GetMergeCommits(IEnumerable<CpCommit> commits)
+    {
+        return commits.Where(c => c.ParentShas.Count > 1).ToList();
+    }
+
+    public List<CpCommit> GetLastCommits(IEnumerable<CpCommit> commits)
+    {
+        return commits.OrderByDescending(c => c.Timestamp).Take(1).ToList();
+    }
+
+    public List<LibGit2Sharp.Commit> GetMergeCommits(IEnumerable<LibGit2Sharp.Commit> commits)
+    {
+        return commits.Where(c => c.Parents.Count() > 1).ToList();
+    }
+
+    public List<LibGit2Sharp.Commit> GetLastCommits(IEnumerable<LibGit2Sharp.Commit> commits)
+    {
+        return commits.OrderByDescending(c => c.Author.When).Take(1).ToList();
     }
 }

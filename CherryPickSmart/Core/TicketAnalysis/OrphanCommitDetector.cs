@@ -7,8 +7,8 @@ public class OrphanCommitDetector
 {
     public record OrphanCommit
     {
-        public Commit Commit { get; init; } = null!;
-        public List<TicketSuggestion> Suggestions { get; init; } = new();
+        public CpCommit Commit { get; init; } = null!;
+        public List<TicketSuggestion> Suggestions { get; init; } = [];
         public string Reason { get; init; } = ""; // Why it's orphaned
     }
 
@@ -16,41 +16,36 @@ public class OrphanCommitDetector
     {
         public string TicketKey { get; init; } = "";
         public double Confidence { get; init; } // 0-100
-        public List<string> Reasons { get; init; } = new();
+        public List<string> Reasons { get; init; } = [];
     }
 
     public List<OrphanCommit> FindOrphans(
-        CommitGraph graph, 
-        Dictionary<string, List<string>> ticketCommitMap)
+        CpCommitGraph graph, 
+        Dictionary<string, List<CpCommit>> ticketCommitMap)
     {
         var orphans = new List<OrphanCommit>();
         var allCommitsWithTickets = ticketCommitMap.Values.SelectMany(x => x).ToHashSet();
 
         foreach (var (sha, commit) in graph.Commits)
         {
-            if (!allCommitsWithTickets.Contains(sha))
+            if (allCommitsWithTickets.Any(a => a.Sha == sha)) continue;
+            var reason = DetermineOrphanReason(commit);
+            orphans.Add(new OrphanCommit
             {
-                var reason = DetermineOrphanReason(commit);
-                orphans.Add(new OrphanCommit
-                {
-                    Commit = commit,
-                    Reason = reason,
-                    Suggestions = new() // Will be filled by inference engine
-                });
-            }
+                Commit = commit,
+                Reason = reason,
+                Suggestions = [] // Will be filled by inference engine
+            });
         }
 
         return orphans;
     }
 
-    private string DetermineOrphanReason(Commit commit)
+    private static string DetermineOrphanReason(CpCommit commit)
     {
         if (Regex.IsMatch(commit.Message, @"(?i)(hsamed|proj)\s*\d+"))
             return "Malformed ticket reference detected";
 
-        if (commit.Message.Length < 10)
-            return "Commit message too short";
-
-        return "No ticket reference found";
+        return commit.Message.Length < 10 ? "Commit message too short" : "No ticket reference found";
     }
 }

@@ -1,6 +1,6 @@
+using CherryPickSmart.Models;
 using Spectre.Console;
 using static CherryPickSmart.Core.TicketAnalysis.OrphanCommitDetector;
-using CherryPickSmart.Core.TicketAnalysis;
 using static CherryPickSmart.Core.Integration.JiraClient; // Add this if TicketInfo is defined here
 
 namespace CherryPickSmart.Services;
@@ -48,11 +48,11 @@ public class InteractivePromptService
         return selected.Select(s => s.Split(" - ")[0]).ToList();
     }
 
-    public Task<Dictionary<string, string>> ResolveOrphansAsync(
+    public Task<Dictionary<CpCommit, string>> ResolveOrphansAsync(
         List<OrphanCommit> orphans,
         bool autoAcceptHighConfidence = false)
     {
-        var assignments = new Dictionary<string, string>();
+        var assignments = new Dictionary<CpCommit, string>();
 
         AnsiConsole.Write(new Rule("[red]Orphaned Commits[/]"));
         AnsiConsole.MarkupLine($"Found [yellow]{orphans.Count}[/] commits without ticket references.\n");
@@ -74,7 +74,7 @@ public class InteractivePromptService
 
             if (autoAcceptHighConfidence && highConfidenceSuggestion != null)
             {
-                assignments[orphan.Commit.Sha] = highConfidenceSuggestion.TicketKey;
+                assignments[orphan.Commit] = highConfidenceSuggestion.TicketKey;
                 AnsiConsole.MarkupLine(
                     $"[green]✓ Auto-assigned to {highConfidenceSuggestion.TicketKey}[/] " +
                     $"({highConfidenceSuggestion.Confidence:F0}% confidence - {string.Join(", ", highConfidenceSuggestion.Reasons)})");
@@ -115,11 +115,11 @@ public class InteractivePromptService
             if (choice == "Enter ticket manually")
             {
                 var ticket = AnsiConsole.Ask<string>("Enter ticket (e.g., HSAMED-1234):");
-                assignments[orphan.Commit.Sha] = ticket;
+                assignments[orphan.Commit] = ticket; // Fix: Use orphan.Commit directly instead of orphan.Commit.Sha
             }
             else if (choice != "Skip this commit")
             {
-                assignments[orphan.Commit.Sha] = choice;
+                assignments[orphan.Commit] = choice; // Fix: Use orphan.Commit directly instead of orphan.Commit.Sha
             }
 
             AnsiConsole.WriteLine();

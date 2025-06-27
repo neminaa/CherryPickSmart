@@ -13,7 +13,7 @@ public class GitHistoryParser
         _logger = logger;
     }
 
-    public CommitGraph ParseHistory(string repositoryPath, string fromBranch, string toBranch)
+    public CpCommitGraph ParseHistory(string repositoryPath, string fromBranch, string toBranch)
     {
         using var repo = new Repository(repositoryPath);
 
@@ -32,7 +32,7 @@ public class GitHistoryParser
             SortBy = CommitSortStrategies.Reverse
         };
 
-        var commits = new Dictionary<string, CherryPickSmart.Models.Commit>();
+        var commits = new Dictionary<string, CherryPickSmart.Models.CpCommit>();
         var childrenMap = new Dictionary<string, List<string>>();
 
         foreach (var commit in repo.Commits.QueryBy(filter))
@@ -50,25 +50,17 @@ public class GitHistoryParser
                 modifiedFiles.Add(entry.Path);
             }
 
-            commits[sha] = new CherryPickSmart.Models.Commit
-            {
-                Sha = sha,
-                ParentShas = parents,
-                Timestamp = timestamp,
-                Author = author,
-                Message = message,
-                ModifiedFiles = modifiedFiles
-            };
+            commits[sha] = new CpCommit(commit,modifiedFiles);
 
             foreach (var parent in parents)
             {
                 if (!childrenMap.ContainsKey(parent))
-                    childrenMap[parent] = new();
+                    childrenMap[parent] = [];
                 childrenMap[parent].Add(sha);
             }
         }
 
-        return new CommitGraph
+        return new CpCommitGraph
         {
             Commits = commits,
             ChildrenMap = childrenMap,

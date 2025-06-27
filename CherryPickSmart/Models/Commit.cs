@@ -29,6 +29,7 @@ public record CpCommit
         Author = commit.Author.Name;
         Message = commit.Message;
         ModifiedFiles = modifiedFiles ?? commit.Tree.Select(entry => entry.Path).ToList();
+
         Commit = commit;
     }
 }

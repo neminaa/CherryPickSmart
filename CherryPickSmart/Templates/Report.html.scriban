@@ -1,90 +1,653 @@
-<!DOCTYPE html>
-<html>
+﻿<!DOCTYPE html>
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>CherryPickSmart Report</title>
-  <style>
-    body { font-family: sans-serif; }
-    .ticket-section { margin-bottom: 2em; }
-    .ticket-header { background: #e3f2fd; padding: .5em; border-radius: 4px; }
-    .subsection { margin-top: 1em; }
-    .merge-item { background: #f1f8e9; padding: .5em; margin: .25em 0; border-left: 4px solid #8bc34a; }
-    .last-item  { background: #fff3e0; padding: .5em; margin: .25em 0; border-left: 4px solid #ff9800; }
-    .other-item { margin: .25em 0; }
-    .pick-order { background: #e8eaf6; padding: .5em; border-left: 4px solid #3f51b5; }
-  </style>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CherryPickSmart Analysis Report</title>
+    <style>
+        :root {
+            --primary-color: #2563eb;
+            --success-color: #059669;
+            --warning-color: #d97706;
+            --danger-color: #dc2626;
+            --info-color: #0891b2;
+            --light-bg: #f8fafc;
+            --border-color: #e2e8f0;
+            --text-color: #1e293b;
+            --text-muted: #64748b;
+        }
+
+        * { box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: var(--text-color);
+            margin: 0;
+            padding: 0;
+            background-color: var(--light-bg);
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .header {
+            background: linear-gradient(135deg, var(--primary-color), #3b82f6);
+            color: white;
+            padding: 2rem;
+            border-radius: 12px;
+            margin-bottom: 2rem;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+        }
+
+        .header h1 {
+            margin: 0 0 1rem 0;
+            font-size: 2.5rem;
+            font-weight: 700;
+        }
+
+        .header-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .header-info-item {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 1rem;
+            border-radius: 8px;
+            backdrop-filter: blur(10px);
+        }
+
+        .header-info-item strong {
+            display: block;
+            font-size: 0.875rem;
+            opacity: 0.8;
+            margin-bottom: 0.25rem;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1);
+            border-left: 4px solid var(--primary-color);
+        }
+
+        .stat-card h3 {
+            margin: 0 0 1rem 0;
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .stat-card .value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--primary-color);
+        }
+
+        .stat-card .description {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            margin-top: 0.5rem;
+        }
+
+        .section {
+            background: white;
+            margin-bottom: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1);
+            overflow: hidden;
+        }
+
+        .section-header {
+            background: var(--light-bg);
+            padding: 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .section-header h2 {
+            margin: 0;
+            color: var(--text-color);
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        .section-content {
+            padding: 1.5rem;
+        }
+
+        .ticket-card {
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            margin-bottom: 1.5rem;
+            overflow: hidden;
+        }
+
+        .ticket-header {
+            background: linear-gradient(90deg, var(--primary-color), #3b82f6);
+            color: white;
+            padding: 1rem 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .ticket-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin: 0;
+        }
+
+        .ticket-priority {
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .ticket-body {
+            padding: 1.5rem;
+        }
+
+        .ticket-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            padding: 1rem;
+            background: var(--light-bg);
+            border-radius: 8px;
+        }
+
+        .ticket-stat {
+            text-align: center;
+        }
+
+        .ticket-stat .value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--primary-color);
+        }
+
+        .ticket-stat .label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .commit-list {
+            margin-top: 1rem;
+        }
+
+        .commit-item {
+            display: flex;
+            align-items: center;
+            padding: 0.75rem;
+            margin-bottom: 0.5rem;
+            border-radius: 6px;
+            border-left: 3px solid var(--border-color);
+        }
+
+        .commit-item.merge {
+            background: #ecfdf5;
+            border-left-color: var(--success-color);
+        }
+
+        .commit-item.regular {
+            background: #eff6ff;
+            border-left-color: var(--info-color);
+        }
+
+        .commit-sha {
+            font-family: 'Monaco', 'Menlo', monospace;
+            background: var(--border-color);
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            margin-right: 1rem;
+        }
+
+        .commit-message {
+            flex: 1;
+            font-weight: 500;
+        }
+
+        .risk-badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .risk-low { background: #dcfce7; color: var(--success-color); }
+        .risk-medium { background: #fef3c7; color: var(--warning-color); }
+        .risk-high { background: #fee2e2; color: var(--danger-color); }
+        .risk-certain { background: #fee2e2; color: var(--danger-color); font-weight: 700; }
+
+        .conflict-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+        }
+
+        .conflict-table th,
+        .conflict-table td {
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .conflict-table th {
+            background: var(--light-bg);
+            font-weight: 600;
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .conflict-file {
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.875rem;
+        }
+
+        .orphan-item {
+            display: flex;
+            align-items: center;
+            padding: 1rem;
+            margin-bottom: 0.75rem;
+            background: #fef7cd;
+            border-left: 4px solid var(--warning-color);
+            border-radius: 6px;
+        }
+
+        .orphan-severity {
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            margin-right: 1rem;
+        }
+
+        .orphan-severity.high { background: var(--danger-color); color: white; }
+        .orphan-severity.medium { background: var(--warning-color); color: white; }
+        .orphan-severity.low { background: var(--text-muted); color: white; }
+
+        .recommendation-item {
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border-radius: 8px;
+            border-left: 4px solid var(--info-color);
+        }
+
+        .recommendation-item.high { border-left-color: var(--danger-color); background: #fef2f2; }
+        .recommendation-item.medium { border-left-color: var(--warning-color); background: #fffbeb; }
+
+        .recommendation-title {
+            font-weight: 600;
+            color: var(--text-color);
+            margin-bottom: 0.5rem;
+        }
+
+        .recommendation-description {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+        }
+
+        .risk-assessment {
+            background: linear-gradient(135deg, #fee2e2, #fecaca);
+            padding: 1.5rem;
+            border-radius: 12px;
+            border-left: 4px solid var(--danger-color);
+        }
+
+        .risk-score {
+            font-size: 3rem;
+            font-weight: 700;
+            color: var(--danger-color);
+            text-align: center;
+            margin-bottom: 0.5rem;
+        }
+
+        .risk-level {
+            text-align: center;
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-color);
+            margin-bottom: 1rem;
+        }
+
+        .top-risks {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .top-risks li {
+            padding: 0.5rem 0;
+            border-bottom: 1px solid rgba(220, 38, 38, 0.2);
+        }
+
+        .top-risks li:last-child {
+            border-bottom: none;
+        }
+
+        .no-data {
+            text-align: center;
+            color: var(--text-muted);
+            font-style: italic;
+            padding: 2rem;
+        }
+
+        @media (max-width: 768px) {
+            .container { padding: 1rem; }
+            .header-info { grid-template-columns: 1fr; }
+            .stats-grid { grid-template-columns: 1fr; }
+            .ticket-stats { grid-template-columns: repeat(2, 1fr); }
+        }
+    </style>
 </head>
 <body>
-  <h1>CherryPickSmart Analysis Report</h1>
-  <p>From <strong>{{ analysis.FromBranch }}</strong> to <strong>{{ analysis.ToBranch }}</strong></p>
-
-  {{ for t in analysis.Tickets }}
-    <div class="ticket-section">
-      <h2 class="ticket-header">Ticket: {{ t.Number }}</h2>
-
-      <div class="subsection">
-        <h3>Pick Order</h3>
-        {{ if t.PickOrder.size > 0 }}
-          <ol>
-            {{ for c in t.PickOrder }}
-              <li class="pick-order"><strong>{{ c.ShortSha }}</strong>: {{ c.Message }}</li>
-            {{ end }}
-          </ol>
-        {{ else }}
-          <p>No pick order defined.</p>
-        {{ end }}
-      </div>
-
-      <div class="subsection">
-        <h3>Merge Commits</h3>
-        {{ if t.MergeCommits.size > 0 }}
-          {{ for c in t.MergeCommits }}
-            <div class="merge-item">
-              <strong>{{ c.ShortSha }}</strong>: {{ c.Message }}
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>🍒 CherryPickSmart Analysis Report</h1>
+            <div class="header-info">
+                <div class="header-info-item">
+                    <strong>From Branch</strong>
+                    <div>{{ from_branch }}</div>
+                </div>
+                <div class="header-info-item">
+                    <strong>To Branch</strong>
+                    <div>{{ to_branch }}</div>
+                </div>
+                <div class="header-info-item">
+                    <strong>Analysis Date</strong>
+                    <div>{{ analysis_timestamp | date.to_string "%Y-%m-%d %H:%M:%S" }}</div>
+                </div>
+                <div class="header-info-item">
+                    <strong>Analysis ID</strong>
+                    <div>{{ analysis_id }}</div>
+                </div>
             </div>
-          {{ end }}
-        {{ else }}
-          <p>No merge commits for this ticket.</p>
-        {{ end }}
-      </div>
+        </div>
 
-      <div class="subsection">
-        <h3>Last Commits</h3>
-        {{ if t.LastCommits.size > 0 }}
-          {{ for c in t.LastCommits }}
-            <div class="last-item">
-              <strong>{{ c.ShortSha }}</strong>: {{ c.Message }}
+        <!-- Statistics Overview -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>Total Commits</h3>
+                <div class="value">{{ statistics.total_commits_analyzed }}</div>
+                <div class="description">Analyzed for cherry-picking</div>
             </div>
-          {{ end }}
-        {{ else }}
-          <p>No final commits for this ticket.</p>
-        {{ end }}
-      </div>
+            <div class="stat-card">
+                <h3>Tickets Found</h3>
+                <div class="value">{{ statistics.total_tickets }}</div>
+                <div class="description">{{ statistics.ticket_coverage | math.round 1 }}% coverage</div>
+            </div>
+            <div class="stat-card">
+                <h3>Orphan Commits</h3>
+                <div class="value">{{ statistics.orphan_commits }}</div>
+                <div class="description">Without ticket references</div>
+            </div>
+            <div class="stat-card">
+                <h3>Predicted Conflicts</h3>
+                <div class="value">{{ statistics.predicted_conflicts }}</div>
+                <div class="description">Potential merge conflicts</div>
+            </div>
+        </div>
 
-      <div class="subsection">
-        <h3>Other Commits</h3>
-        {{ if t.OtherCommits.size > 0 }}
-          {{ for c in t.OtherCommits }}
-            <div class="other-item">
-              <strong>{{ c.ShortSha }}</strong>: {{ c.Message }}
+        <!-- Risk Assessment -->
+        {{ if recommended_plan && recommended_plan.risk_assessment }}
+        <div class="section">
+            <div class="section-header">
+                <h2>🎯 Risk Assessment</h2>
             </div>
-          {{ end }}
-        {{ else }}
-          <p>All commits are categorized above.</p>
+            <div class="section-content">
+                <div class="risk-assessment">
+                    <div class="risk-score">{{ recommended_plan.risk_assessment.overall_risk_score | math.round 0 }}</div>
+                    <div class="risk-level">{{ recommended_plan.risk_assessment.risk_level }} Risk Level</div>
+                    {{ if recommended_plan.risk_assessment.top_risks && recommended_plan.risk_assessment.top_risks.size > 0 }}
+                    <h4>Top Risks:</h4>
+                    <ul class="top-risks">
+                        {{ for risk in recommended_plan.risk_assessment.top_risks }}
+                        <li>{{ risk }}</li>
+                        {{ end }}
+                    </ul>
+                    {{ end }}
+                </div>
+            </div>
+        </div>
         {{ end }}
-      </div>
+
+        <!-- Ticket Analysis -->
+        {{ if ticket_analyses && ticket_analyses.size > 0 }}
+        <div class="section">
+            <div class="section-header">
+                <h2>🎫 Ticket Analysis</h2>
+            </div>
+            <div class="section-content">
+                {{ for ticket in ticket_analyses }}
+                <div class="ticket-card">
+                    <div class="ticket-header">
+                        <h3 class="ticket-title">{{ ticket.ticket_key }}</h3>
+                        <span class="ticket-priority">{{ ticket.priority }}</span>
+                    </div>
+                    <div class="ticket-body">
+                        <div class="ticket-stats">
+                            <div class="ticket-stat">
+                                <div class="value">{{ ticket.all_commits.size }}</div>
+                                <div class="label">Total Commits</div>
+                            </div>
+                            <div class="ticket-stat">
+                                <div class="value">{{ ticket.merge_commits.size }}</div>
+                                <div class="label">Merge Commits</div>
+                            </div>
+                            <div class="ticket-stat">
+                                <div class="value">{{ ticket.authors.size }}</div>
+                                <div class="label">Authors</div>
+                            </div>
+                            <div class="ticket-stat">
+                                <div class="value">{{ ticket.total_files_modified }}</div>
+                                <div class="label">Files Modified</div>
+                            </div>
+                        </div>
+
+                        {{ if ticket.recommended_strategy }}
+                        <div style="margin-bottom: 1rem;">
+                            <strong>Recommended Strategy:</strong> {{ ticket.recommended_strategy.type }}
+                            <br><em>{{ ticket.recommended_strategy.description }}</em>
+                        </div>
+                        {{ end }}
+
+                        {{ if ticket.merge_commits && ticket.merge_commits.size > 0 }}
+                        <h4>🔀 Merge Commits</h4>
+                        <div class="commit-list">
+                            {{ for commit in ticket.merge_commits }}
+                            <div class="commit-item merge">
+                                <span class="commit-sha">{{ commit.short_sha }}</span>
+                                <span class="commit-message">{{ commit.message }}</span>
+                            </div>
+                            {{ end }}
+                        </div>
+                        {{ end }}
+
+                        {{ if ticket.regular_commits && ticket.regular_commits.size > 0 }}
+                        <h4>📝 Regular Commits</h4>
+                        <div class="commit-list">
+                            {{ for commit in ticket.regular_commits }}
+                            <div class="commit-item regular">
+                                <span class="commit-sha">{{ commit.short_sha }}</span>
+                                <span class="commit-message">{{ commit.message }}</span>
+                            </div>
+                            {{ end }}
+                        </div>
+                        {{ end }}
+                    </div>
+                </div>
+                {{ end }}
+            </div>
+        </div>
+        {{ else }}
+        <div class="section">
+            <div class="section-header">
+                <h2>🎫 Ticket Analysis</h2>
+            </div>
+            <div class="section-content">
+                <div class="no-data">No tickets found in the analysis.</div>
+            </div>
+        </div>
+        {{ end }}
+
+        <!-- Conflict Analysis -->
+        {{ if conflict_analysis && conflict_analysis.all_conflicts && conflict_analysis.all_conflicts.size > 0 }}
+        <div class="section">
+            <div class="section-header">
+                <h2>⚠️ Conflict Analysis</h2>
+            </div>
+            <div class="section-content">
+                <table class="conflict-table">
+                    <thead>
+                        <tr>
+                            <th>File</th>
+                            <th>Risk Level</th>
+                            <th>Type</th>
+                            <th>Commits</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{ for conflict in conflict_analysis.all_conflicts }}
+                        <tr>
+                            <td class="conflict-file">{{ conflict.file }}</td>
+                            <td>
+                                <span class="risk-badge risk-{{ conflict.risk | string.downcase }}">
+                                    {{ conflict.risk }}
+                                </span>
+                            </td>
+                            <td>{{ conflict.type }}</td>
+                            <td>{{ conflict.conflicting_commits.size }}</td>
+                            <td>{{ conflict.description | string.truncate 80 }}</td>
+                        </tr>
+                        {{ end }}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {{ else }}
+        <div class="section">
+            <div class="section-header">
+                <h2>⚠️ Conflict Analysis</h2>
+            </div>
+            <div class="section-content">
+                <div class="no-data">✅ No significant conflicts predicted!</div>
+            </div>
+        </div>
+        {{ end }}
+
+        <!-- Orphan Analysis -->
+        {{ if orphan_analysis && orphan_analysis.orphan_commits && orphan_analysis.orphan_commits.size > 0 }}
+        <div class="section">
+            <div class="section-header">
+                <h2>🏴 Orphaned Commits</h2>
+            </div>
+            <div class="section-content">
+                {{ for orphan in orphan_analysis.orphan_commits }}
+                <div class="orphan-item">
+                    <span class="orphan-severity {{ orphan.severity | string.downcase }}">{{ orphan.severity }}</span>
+                    <span class="commit-sha">{{ orphan.commit.short_sha }}</span>
+                    <span class="commit-message">{{ orphan.commit.message }}</span>
+                </div>
+                <div style="margin-left: 2rem; margin-bottom: 1rem; color: var(--text-muted); font-size: 0.875rem;">
+                    <strong>Reason:</strong> {{ orphan.reason }}
+                    {{ if orphan.suggestions && orphan.suggestions.size > 0 }}
+                    <br><strong>Suggestion:</strong> {{ orphan.suggestions[0].ticket_key }} ({{ orphan.suggestions[0].confidence }}% confidence)
+                    {{ end }}
+                </div>
+                {{ end }}
+            </div>
+        </div>
+        {{ else }}
+        <div class="section">
+            <div class="section-header">
+                <h2>🏴 Orphaned Commits</h2>
+            </div>
+            <div class="section-content">
+                <div class="no-data">✅ No orphaned commits found!</div>
+            </div>
+        </div>
+        {{ end }}
+
+        <!-- Recommendations -->
+        {{ if recommendations && recommendations.size > 0 }}
+        <div class="section">
+            <div class="section-header">
+                <h2>💡 Recommendations</h2>
+            </div>
+            <div class="section-content">
+                {{ for rec in recommendations }}
+                <div class="recommendation-item {{ rec.priority | string.downcase }}">
+                    <div class="recommendation-title">
+                        {{ rec.title }} ({{ rec.priority }} Priority)
+                    </div>
+                    <div class="recommendation-description">
+                        {{ rec.description }}
+                    </div>
+                </div>
+                {{ end }}
+            </div>
+        </div>
+        {{ else }}
+        <div class="section">
+            <div class="section-header">
+                <h2>💡 Recommendations</h2>
+            </div>
+            <div class="section-content">
+                <div class="no-data">No specific recommendations at this time.</div>
+            </div>
+        </div>
+        {{ end }}
+
+        <!-- Summary -->
+        <div class="section">
+            <div class="section-header">
+                <h2>📋 Summary</h2>
+            </div>
+            <div class="section-content">
+                {{ if recommended_plan && recommended_plan.summary }}
+                <p><strong>Plan:</strong> {{ recommended_plan.summary }}</p>
+                {{ end }}
+                <p><strong>Analysis Duration:</strong> {{ statistics.analysis_duration.total_seconds | math.round 1 }}s</p>
+                <p><strong>Overall Assessment:</strong> 
+                    {{ if statistics.predicted_conflicts == 0 && statistics.orphan_commits == 0 }}
+                        ✅ Clean cherry-pick recommended - low risk of conflicts.
+                    {{ else if statistics.predicted_conflicts > 0 }}
+                        ⚠️ Review predicted conflicts before proceeding.
+                    {{ else }}
+                        📝 Consider handling orphaned commits for better traceability.
+                    {{ end }}
+                </p>
+            </div>
+        </div>
     </div>
-  {{ end }}
-
-  <h2>Orphaned Commits (No Ticket)</h2>
-  {{ if analysis.Orphans.size > 0 }}
-    <ul>
-    {{ for o in analysis.Orphans }}
-      <li>{{ o.ShortSha }} � {{ o.Message }}</li>
-    {{ end }}
-    </ul>
-  {{ else }}
-    <p>No orphans detected.</p>
-  {{ end }}
 </body>
 </html>

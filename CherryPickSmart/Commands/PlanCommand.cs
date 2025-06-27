@@ -5,7 +5,6 @@ using CherryPickSmart.Core.TicketAnalysis;
 using CherryPickSmart.Models;
 using CherryPickSmart.Services;
 using CommandLine;
-using LibGit2Sharp;
 using Microsoft.Extensions.DependencyInjection;
 using Spectre.Console;
 using System.Text.Json;
@@ -24,6 +23,9 @@ public class PlanCommand : ICommand
 
     [Option("auto-infer", HelpText = "Automatically accept high-confidence inferences")]
     public bool AutoInfer { get; set; }
+    
+    [Option('r', "repo", Required = true, HelpText = "Path to the repository")]
+    public string RepositoryPath { get; set; } = "";
 
     [Option("output", HelpText = "Save plan to file")]
     public string? OutputFile { get; set; }
@@ -57,7 +59,7 @@ public class PlanCommand : ICommand
 
         var selectedCommits = GetCommitsForTickets(selectedTickets, ticketMap, orphanAssignments);
         var conflictPredictor = services.GetRequiredService<ConflictPredictor>();
-        var conflicts = conflictPredictor.PredictConflicts(selectedCommits, targetCommits);
+        var conflicts = conflictPredictor.PredictConflicts(RepositoryPath,selectedCommits, ToBranch);
 
         if (conflicts.Any(c => c.Risk >= ConflictRisk.High))
         {

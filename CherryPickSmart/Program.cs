@@ -1,4 +1,5 @@
 ﻿using CherryPickSmart.Commands;
+using CherryPickSmart.Core.ConflictAnalysis;
 using CherryPickSmart.Core.GitAnalysis;
 using CherryPickSmart.Core.Integration;
 using CherryPickSmart.Core.TicketAnalysis;
@@ -10,26 +11,28 @@ using Microsoft.Extensions.Hosting;
 
 var host = CreateHostBuilder(args).Build();
 
-return Parser.Default.ParseArguments<
-    AnalyzeCommand,
-    PlanCommand
-    //        ExecuteCommand,
-    //        ConfigCommand
+return await Parser.Default.ParseArguments<
+        AnalyzeCommand,
+        PlanCommand
+        //        ExecuteCommand,
+        //        ConfigCommand
     >(args)
-    .MapResult(
-        (AnalyzeCommand cmd) => RunCommandAsync(host, cmd).GetAwaiter().GetResult(),
-        (PlanCommand cmd) => RunCommandAsync(host, cmd).GetAwaiter().GetResult(),
+    .MapResult<AnalyzeCommand, PlanCommand, Task<int>>(
+        async cmd => await RunCommandAsync(host, cmd),
+        async cmd => await RunCommandAsync(host, cmd),
 //            async (ExecuteCommand cmd) => await RunCommandAsync(host, cmd),
 //            async (ConfigCommand cmd) => await RunCommandAsync(host, cmd),
-        errs => 1);
+        _ => Task.FromResult(1));
 
 static IHostBuilder CreateHostBuilder(string[] args) =>
     Host.CreateDefaultBuilder(args)
-        .ConfigureServices((context, services) =>
+        .ConfigureServices((_, services) =>
         {
             // Register all services
             services.AddSingleton<GitHistoryParser>();
-            services.AddSingleton<IMergeCommitAnalyzer,MergeCommitAnalyzer>();
+            services.AddSingleton<MergeCommitAnalyzer>();
+            services.AddSingleton<OrderOptimizer>();
+            services.AddSingleton<ConflictPredictor>();
             services.AddSingleton<TicketExtractor>();
             services.AddSingleton<OrphanCommitDetector>();
             services.AddSingleton<TicketInferenceEngine>();

@@ -3,6 +3,7 @@ using CherryPickSmart.Models;
 using LibGit2Sharp;
 using Spectre.Console;
 using System.Text;
+using Tree = Spectre.Console.Tree;
 
 namespace CherryPickSmart.Core.ConflictAnalysis;
 
@@ -68,10 +69,8 @@ public class ConflictPredictor
         var semanticConflicts = AnsiConsole.Status()
             .Spinner(Spinner.Known.Dots2)
             .SpinnerStyle(Style.Parse("yellow"))
-            .Start("🔍 Analyzing semantic conflicts...", ctx =>
-            {
-                return PredictSemanticConflicts(repo, commitsToCherry, targetBranchRef);
-            });
+            .Start("🔍 Analyzing semantic conflicts...", _ =>
+                PredictSemanticConflicts(repo, commitsToCherry, targetBranchRef));
 
         predictions.AddRange(semanticConflicts);
 
@@ -129,11 +128,11 @@ public class ConflictPredictor
                         if (prediction is { Risk: > ConflictRisk.Low })
                         {
                             predictions.Add(prediction);
-                            analysisDisplay.AddResult(file, prediction.Risk, prediction.Type, true);
+                            analysisDisplay.AddResult(file, prediction.Risk, prediction.Type,prediction.ConflictingCommits.Count, true);
                         }
                         else
                         {
-                            analysisDisplay.AddResult(file, ConflictRisk.Low, ConflictType.ContentOverlap, false);
+                            analysisDisplay.AddResult(file, ConflictRisk.Low, ConflictType.ContentOverlap, prediction?.ConflictingCommits.Count ?? 0, false);
                         }
                     }
                     catch (Exception ex)
@@ -161,12 +160,18 @@ public class ConflictPredictor
     /// </summary>
     private class LiveDisplayRenderer
     {
-        private readonly List<(string file, ConflictRisk risk, ConflictType type, bool added)> _results = new();
-        private readonly List<(string file, string error)> _errors = new();
+        private readonly List<(string file, ConflictRisk risk, ConflictType type, bool added)> _results = [];
+        private readonly List<(string file, string error)> _errors = [];
         private string _currentFile = "";
+        private string _currentDirectory = "";
         private int _currentCommits = 0;
         private int _currentIndex = 0;
         private int _totalFiles = 0;
+
+        // Tree structure for displaying files
+        private Tree _directoryTree = new Tree("[yellow]Files[/]");
+        private Dictionary<string, TreeNode> _directoryNodes = new();
+
 
         public void UpdateCurrentFile(string file, int commits, int index, int total)
         {
@@ -174,9 +179,66 @@ public class ConflictPredictor
             _currentCommits = commits;
             _currentIndex = index;
             _totalFiles = total;
+
+            var directory = Path.GetDirectoryName(file) ?? "/";
+
+            if (_currentDirectory != directory)
+            {
+                _currentDirectory = directory;
+
+                // Create directory node if it doesn't exist
+                EnsureDirectoryNode(directory);
+
+                // If this is a new top-level directory, render the tree
+                if (index % 5 == 1 || !_directoryNodes.ContainsKey(GetRootDirectory(directory)))
+                {
+                    AnsiConsole.Write(_directoryTree);
+                    // Reset tree after rendering to avoid duplicates
+                    _directoryTree = new Tree("[yellow]Files[/]");
+                    _directoryNodes.Clear();
+                    EnsureDirectoryNode(directory);
+                }
+            }
+
+        }
+        private string GetRootDirectory(string path)
+        {
+            var parts = path.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+            return parts.Length > 0 ? parts[0] : "/";
         }
 
-        public void AddResult(string file, ConflictRisk risk, ConflictType type, bool added)
+        private TreeNode EnsureDirectoryNode(string directory)
+        {
+            // Already have this exact directory
+            if (_directoryNodes.TryGetValue(directory, out var existingNode))
+                return existingNode;
+
+            var parts = directory.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
+            TreeNode? currentNode = null;
+            var currentPath = "";
+
+            if (string.IsNullOrEmpty(directory))
+            {
+                parts = ["/"]; // Handle root directory case
+            }
+            // Build directory hierarchy
+            foreach (var part in parts)
+            {
+                currentPath = string.IsNullOrEmpty(currentPath) ? part : Path.Combine(currentPath, part);
+
+                if (!_directoryNodes.TryGetValue(currentPath, out var node))
+                {
+                    node = _directoryTree.AddNode($"[blue]{part}/[/]");
+                    _directoryNodes[currentPath] = node;
+                }
+
+                currentNode = node;
+            }
+
+            return currentNode!;
+        }
+        public void AddResult(string file, ConflictRisk risk, ConflictType type, int conflictingCommitsCount,
+            bool added)
         {
             _results.Add((file, risk, type, added));
 
@@ -185,14 +247,39 @@ public class ConflictPredictor
             {
                 var riskColor = GetRiskColor(risk);
                 var typeEmoji = GetTypeEmoji(type);
-                AnsiConsole.MarkupLine($"    {typeEmoji} [{riskColor}]{Path.GetFileName(file)}[/] - {risk} risk");
+                var fileName = Path.GetFileName(file);
+                var directory = Path.GetDirectoryName(file) ?? "/";
+
+                // Add file to the appropriate directory node
+                var directoryNode = EnsureDirectoryNode(directory);
+                directoryNode.AddNode($"{typeEmoji} [{riskColor}]{fileName}[/] - {risk} risk | {conflictingCommitsCount} commits");
             }
         }
+        private static string GetTreeDisplayPath(string fullPath)
+        {
+            // Split the path into segments
+            var parts = fullPath.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
 
+            if (parts.Length <= 2)
+                return fullPath; // Just return the full path if it's short
+
+            // For longer paths, create a tree-like representation
+            var fileName = parts[^1];
+            var parentDir = parts[^2];
+
+            // If path is very long, abbreviate middle directories
+            if (parts.Length > 3)
+            {
+                var rootDir = parts[0];
+                return $"{rootDir}/.../{parentDir}/{fileName}";
+            }
+
+            return $"{parentDir}/{fileName}";
+        }
         public void AddError(string file, string error)
         {
             _errors.Add((file, error));
-            AnsiConsole.MarkupLine($"    [red]⚠ {Path.GetFileName(file)}[/] - Error: {error.Truncate(50)}");
+            AnsiConsole.MarkupLine($"    [red]⚠ {file}[/] - Error: {error.Truncate(50)}");
         }
 
         private string GetRiskColor(ConflictRisk risk) => risk switch
@@ -350,7 +437,7 @@ public class ConflictPredictor
     /// <summary>
     /// Build mapping of files to commits that modify them
     /// </summary>
-    private Dictionary<string, List<CpCommit>> BuildFileCommitMap(List<CpCommit> commits)
+    private static Dictionary<string, List<CpCommit>> BuildFileCommitMap(List<CpCommit> commits)
     {
         var fileCommitMap = new Dictionary<string, List<CpCommit>>();
 
@@ -364,7 +451,7 @@ public class ConflictPredictor
             }
         }
 
-        return fileCommitMap;
+        return fileCommitMap.OrderBy(o => o.Key).ToDictionary();
     }
 
     /// <summary>
@@ -619,7 +706,7 @@ public class ConflictPredictor
         if (authors.Count > 1) 
         {
             riskScore += (authors.Count - 1) * 0.75;
-            
+
             // Bonus risk if no common authors (less coordination)
             var hasCommonAuthor = false;
             foreach (var author in authors)

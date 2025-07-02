@@ -1,26 +1,29 @@
-using CherryPickSmart.Models;
 using CherryPickSmart.Core.GitAnalysis;
+using CherryPickSmart.Models;
+using static CherryPickSmart.Core.GitAnalysis.MergeCommitAnalyzer;
 using static CherryPickSmart.Core.TicketAnalysis.OrphanCommitDetector;
 
 namespace CherryPickSmart.Core.TicketAnalysis;
 
 public class TicketInferenceEngine
 {
-    public Task<List<TicketSuggestion>> GenerateSuggestionsAsync(
+    public async Task<List<TicketSuggestion>> GenerateSuggestionsAsync(
+        List<MergeAnalysis> analysis,
         OrphanCommit orphan,
         CpCommitGraph graph,
         Dictionary<string, List<CpCommit>> ticketCommitMap)
     {
         var suggestions = new List<TicketSuggestion>();
 
-        suggestions.AddRange(AnalyzeMergeContextAsync(orphan, graph).Result);
-        suggestions.AddRange(AnalyzeTemporalClusteringAsync(orphan, graph).Result);
-        suggestions.AddRange(AnalyzeFileOverlapAsync(orphan, graph, ticketCommitMap).Result);
+        suggestions.AddRange(await AnalyzeMergeContextAsync(analysis, orphan, graph));
+        //suggestions.AddRange(AnalyzeTemporalClusteringAsync(orphan, graph).Result);
+        //suggestions.AddRange(AnalyzeFileOverlapAsync(orphan, graph, ticketCommitMap).Result);
 
-        return Task.FromResult(RankSuggestions(suggestions));
+        return RankSuggestions(suggestions);
     }
 
     private static Task<List<TicketSuggestion>> AnalyzeMergeContextAsync(
+        List<MergeAnalysis> analysis,
         OrphanCommit orphan,
         CpCommitGraph graph)
     {
@@ -28,8 +31,6 @@ public class TicketInferenceEngine
 
         foreach (var (mergeSha, merge) in graph.Commits.Where(c => c.Value.IsMergeCommit))
         {
-            var mergeAnalyzer = new MergeCommitAnalyzer();
-            var analysis = mergeAnalyzer.AnalyzeMerges(graph, []);
 
             var mergeAnalysis = analysis.FirstOrDefault(a => a.MergeSha == mergeSha);
             if (mergeAnalysis?.IntroducedCommits.Contains(orphan.Commit.Sha) == true)
@@ -38,7 +39,7 @@ public class TicketInferenceEngine
 
                 foreach (var introducedSha in mergeAnalysis.IntroducedCommits)
                 {
-                    if (graph.Commits[introducedSha].ExtractedTickets.Any())
+                    if (graph.Commits.TryGetValue(introducedSha,out var val) && val.ExtractedTickets.Count > 0)
                     {
                         foreach (var ticket in graph.Commits[introducedSha].ExtractedTickets)
                         {

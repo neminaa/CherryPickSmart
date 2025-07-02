@@ -9,43 +9,63 @@ public class InteractivePromptService
 {
     public List<string> SelectTickets(Dictionary<string, JiraTicket> availableTickets)
     {
-        var tree = new Tree("[yellow]Available Tickets[/]");
-
-        var byStatus = availableTickets.GroupBy(t => t.Value.Status);
-
-        foreach (var statusGroup in byStatus)
+        try
         {
-            var statusNode = tree.AddNode($"[blue]{statusGroup.Key}[/] ({statusGroup.Count()})");
+            var tree = new Tree("[yellow]Available Tickets[/]");
 
-            foreach (var (key, info) in statusGroup)
+            var byStatus = availableTickets.GroupBy(t => t.Value.Status).OrderBy(o => o.Key);
+
+            foreach (var statusGroup in byStatus)
             {
-                var markup = $"[green]{key}[/] - {info.Summary.EscapeMarkup()}";
-                if (info.Priority == "High")
-                    markup = $"[red]![/] {markup}";
+                var statusNode = tree.AddNode($"[blue]{statusGroup.Key}[/] ({statusGroup.Count()})");
 
-                statusNode.AddNode(markup);
+                foreach (var (key, info) in statusGroup)
+                {
+                    var markup = $"[green]{key}[/] - {info.Summary.EscapeMarkup()}";
+                    if (info.Priority == "High")
+                        markup = $"[red]![/] {markup}";
+
+                    statusNode.AddNode(markup);
+                }
             }
+
+            AnsiConsole.Write(tree);
+
+            var excludedStatus = new[]
+            {
+                "SIT Deployed", "Pending SIT Deployment", "To Do", "MR Review", "Desk Check", "In Progress", "Planning"
+            };
+
+            var tickets = availableTickets.Where(w => !excludedStatus.Contains(w.Value.Status))
+                .Select(s => s.Key).ToList();
+            
+            var choices = availableTickets.Where(w => excludedStatus.Contains(w.Value.Status)).Select(t =>
+            {
+                var display = $"{t.Key} - {t.Value.Summary}";
+                if (t.Value.Status != "Ready for Deployment")
+                    display += $" ({t.Value.Status})";
+                return display;
+            }).ToList();
+
+            var selected = AnsiConsole.Prompt(
+                new MultiSelectionPrompt<string>()
+                    .Title("Select tickets to cherry-pick:")
+                    .PageSize(15)
+                    .MoreChoicesText("[grey](Move up and down to reveal more tickets)[/]")
+                    .InstructionsText("[grey](Press [blue]<space>[/] to toggle, [green]<enter>[/] to accept)[/]")
+                    .AddChoices(choices)
+                    .NotRequired()
+                );
+
+            var t = selected.Select(s => s.Split(" - ")[0]).ToList();
+            tickets.AddRange(t);
+            return tickets.Distinct().OrderByDescending(s => s).ToList();
         }
-
-        AnsiConsole.Write(tree);
-
-        var choices = availableTickets.Select(t => 
-        {
-            var display = $"{t.Key} - {t.Value.Summary}";
-            if (t.Value.Status != "Ready for Deployment")
-                display += $" [{t.Value.Status}]";
-            return display;
-        }).ToList();
-
-        var selected = AnsiConsole.Prompt(
-            new MultiSelectionPrompt<string>()
-                .Title("Select tickets to cherry-pick:")
-                .PageSize(15)
-                .MoreChoicesText("[grey](Move up and down to reveal more tickets)[/]")
-                .InstructionsText("[grey](Press [blue]<space>[/] to toggle, [green]<enter>[/] to accept)[/]")
-                .AddChoices(choices));
-
-        return selected.Select(s => s.Split(" - ")[0]).ToList();
+        catch (Exception e)
+        {       
+            Console.WriteLine(e);
+            throw;
+        }
     }
 
     public Task<Dictionary<CpCommit, string>> ResolveOrphansAsync(
@@ -115,11 +135,11 @@ public class InteractivePromptService
             if (choice == "Enter ticket manually")
             {
                 var ticket = AnsiConsole.Ask<string>("Enter ticket (e.g., HSAMED-1234):");
-                assignments[orphan.Commit] = ticket; // Fix: Use orphan.Commit directly instead of orphan.Commit.Sha
+                assignments[orphan.Commit] = ticket;
             }
             else if (choice != "Skip this commit")
             {
-                assignments[orphan.Commit] = choice; // Fix: Use orphan.Commit directly instead of orphan.Commit.Sha
+                assignments[orphan.Commit] = choice;
             }
 
             AnsiConsole.WriteLine();

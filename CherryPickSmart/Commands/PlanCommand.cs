@@ -100,9 +100,13 @@ public class PlanCommand : ICommand
                     if (orphans.Any())
                     {
                         ctx.Status($"🤖 Generating suggestions for {orphans.Count} orphan commits...");
+
+                        var mergeAnalyzer = new MergeCommitAnalyzer();
+                        var analysis = mergeAnalyzer.AnalyzeMerges(graph, []);
+
                         foreach (var orphan in orphans)
                         {
-                            var suggestions = await inferenceEngine.GenerateSuggestionsAsync(orphan, graph, ticketMap);
+                            var suggestions = await inferenceEngine.GenerateSuggestionsAsync(analysis,orphan, graph, ticketMap);
                             orphan.Suggestions.AddRange(suggestions);
                         }
                     }
@@ -215,7 +219,7 @@ public class PlanCommand : ICommand
                 await AnsiConsole.Status()
                     .Spinner(Spinner.Known.Dots)
                     .SpinnerStyle(Style.Parse("blue"))
-                    .StartAsync("Saving plan...", async ctx =>
+                    .StartAsync("Saving plan...", async _ =>
                     {
                         var planJson = JsonSerializer.Serialize(plan, new JsonSerializerOptions { WriteIndented = true });
                         await File.WriteAllTextAsync(outputPath, planJson);
@@ -301,7 +305,7 @@ public class PlanCommand : ICommand
                 $"[bold]{stepNumber++}[/]",
                 $"[{typeColor}]{typeIcon} {step.Type}[/]",
                 $"[white]{step.Description}[/]",
-                $"[cyan mono]{step.GitCommand}[/]"
+                $"[cyan1]{step.GitCommand}[/]"
             );
         }
 

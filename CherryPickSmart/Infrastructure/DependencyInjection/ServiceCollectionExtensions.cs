@@ -60,16 +60,23 @@ namespace CherryPickSmart.Infrastructure.DependencyInjection
         
         private static IServiceCollection AddIntegrationServices(this IServiceCollection services)
         {
-            services.AddSingleton<JiraClient>();
-            services.AddSingleton<GitCommandExecutor>();
+            // HttpClient-based services should be scoped or transient
+            services.AddScoped<JiraClient>();
+            services.AddScoped<GitCommandExecutor>();
             
             return services;
         }
         
         private static IServiceCollection AddApplicationServices(this IServiceCollection services)
         {
+            // Configuration can be singleton
             services.AddSingleton<ConfigurationService>();
-            services.AddSingleton<IReportGenerator, ReportGenerator>();
+            
+            // Report generation might maintain state, consider scoped
+            services.AddScoped<IReportGenerator, ReportGenerator>();
+            
+            // Add new services
+            services.AddSingleton<InteractivePromptService>();
             
             return services;
         }

@@ -273,10 +273,16 @@ public class OrphanCommitDetector
     {
         var suggestions = new List<TicketSuggestion>();
         var orphanFiles = orphanCommit.ModifiedFiles.ToHashSet();
-
+        orphanFiles = orphanFiles.Where(f =>
+            !f.EndsWith("packages.lock.json", StringComparison.OrdinalIgnoreCase)).ToHashSet();
+        
         foreach (var (ticketKey, commits) in ticketCommitMap)
         {
             var ticketFiles = commits.SelectMany(c => c.ModifiedFiles).ToHashSet();
+
+            ticketFiles = ticketFiles.Where(f =>
+                !f.EndsWith("packages.lock.json", StringComparison.OrdinalIgnoreCase)).ToHashSet();
+
             var overlap = orphanFiles.Intersect(ticketFiles).Count();
 
             if (overlap > 0)

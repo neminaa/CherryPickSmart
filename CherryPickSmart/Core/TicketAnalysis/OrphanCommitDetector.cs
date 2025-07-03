@@ -1,12 +1,10 @@
 using System.Text.RegularExpressions;
 using CherryPickSmart.Models;
-using CherryPickSmart.Core.TicketAnalysis;
 
 namespace CherryPickSmart.Core.TicketAnalysis;
 
 public class OrphanCommitDetector
 {
-    private readonly TicketExtractor _ticketExtractor;
     private readonly Regex _malformedTicketRegex;
 
     public record OrphanCommit
@@ -44,10 +42,8 @@ public class OrphanCommitDetector
 
     public OrphanCommitDetector(TicketExtractor ticketExtractor)
     {
-        _ticketExtractor = ticketExtractor;
-
         // Build regex pattern from valid prefixes
-        var prefixes = string.Join("|", _ticketExtractor.ValidPrefixes.Select(Regex.Escape));
+        var prefixes = string.Join("|", ticketExtractor.ValidPrefixes.Select(Regex.Escape));
         _malformedTicketRegex = new Regex(
             $@"(?i)({prefixes})[\s_]*(\d{{1,6}})",
             RegexOptions.Compiled | RegexOptions.IgnoreCase
@@ -357,7 +353,7 @@ public class OrphanCommitDetector
         var relatedCommits = graph.Commits.Values
             .Where(c => c.Author == orphanCommit.Author)
             .Where(c => Math.Abs((c.Timestamp - orphanCommit.Timestamp).TotalDays) <= timeWindow.TotalDays)
-            .Where(c => c.ExtractedTickets.Any())
+            .Where(c => c.ExtractedTickets.Count > 0)
             .ToList();
 
         var ticketCounts = relatedCommits
@@ -413,7 +409,7 @@ public class OrphanCommitDetector
     {
         var compareWords = ExtractKeywords(compareMessage);
 
-        if (!orphanWords.Any() || !compareWords.Any())
+        if (orphanWords.Count == 0 || compareWords.Count == 0)
             return 0;
 
         var intersection = orphanWords.Intersect(compareWords).Count();

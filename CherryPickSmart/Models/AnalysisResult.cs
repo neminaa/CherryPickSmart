@@ -1,6 +1,5 @@
 ﻿using CherryPickSmart.Commands;
 using CherryPickSmart.Core.ConflictAnalysis;
-using CherryPickSmart.Core.GitAnalysis;
 using CherryPickSmart.Core.TicketAnalysis;
 
 namespace CherryPickSmart.Models
@@ -58,7 +57,7 @@ namespace CherryPickSmart.Models
 
     public class ConflictAnalysis
     {
-        public List<ConflictPredictor.ConflictPrediction> AllConflicts { get; set; } = [];
+        public List<ConflictPrediction> AllConflicts { get; set; } = [];
         public ConflictStatistics Statistics { get; set; } = null!;
     }
 

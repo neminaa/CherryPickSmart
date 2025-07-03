@@ -160,7 +160,7 @@ public class TicketExtractor
     public TicketExtractionStats GetExtractionStats(CpCommitGraph graph)
     {
         var ticketMap = BuildTicketCommitMap(graph);
-        var commitsWithTickets = graph.Commits.Values.Count(c => c.ExtractedTickets.Any());
+        var commitsWithTickets = graph.Commits.Values.Count(c => c.ExtractedTickets.Count > 0);
         var commitsWithoutTickets = graph.Commits.Count - commitsWithTickets;
 
         return new TicketExtractionStats
@@ -193,7 +193,7 @@ public class TicketExtractor
             .Where(c => c.ExtractedTickets.Contains(ticketId, StringComparer.OrdinalIgnoreCase))
             .ToList();
 
-        if (!ticketCommits.Any())
+        if (ticketCommits.Count == 0)
             return [];
 
         // Get common file patterns from ticket commits

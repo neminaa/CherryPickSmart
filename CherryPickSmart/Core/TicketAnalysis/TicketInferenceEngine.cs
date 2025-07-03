@@ -1,4 +1,3 @@
-using CherryPickSmart.Core.GitAnalysis;
 using CherryPickSmart.Models;
 using static CherryPickSmart.Core.GitAnalysis.MergeCommitAnalyzer;
 using static CherryPickSmart.Core.TicketAnalysis.OrphanCommitDetector;
@@ -48,7 +47,7 @@ public class TicketInferenceEngine
                     }
                 }
 
-                if (ticketCounts.Any())
+                if (ticketCounts.Count > 0)
                 {
                     var dominantTicket = ticketCounts.OrderByDescending(x => x.Value).First();
                     var totalCommitsInMerge = mergeAnalysis.IntroducedCommits.Count;
@@ -129,7 +128,7 @@ public class TicketInferenceEngine
                 }
             }
 
-            if (overlappingFiles.Any())
+            if (overlappingFiles.Count > 0)
             {
                 fileOverlaps[ticket] = overlappingFiles.ToList();
             }

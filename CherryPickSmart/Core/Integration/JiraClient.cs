@@ -114,7 +114,7 @@ public class JiraClient
             results[key] = _cache[key];
         }
 
-        if (!uncachedKeys.Any())
+        if (uncachedKeys.Count == 0)
             return results;
 
         if (string.IsNullOrEmpty(_settings.Jira?.Url))

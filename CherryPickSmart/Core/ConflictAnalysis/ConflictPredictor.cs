@@ -1,43 +1,21 @@
-﻿using CherryPickSmart.Commands;
-using CherryPickSmart.Models;
+﻿using CherryPickSmart.Models;
 using LibGit2Sharp;
-using Spectre.Console;
-using System.Text;
-using Tree = Spectre.Console.Tree;
+using System.Collections.Concurrent;
 
 namespace CherryPickSmart.Core.ConflictAnalysis;
 
+/// <summary>
+/// Predicts conflicts for commits being cherry-picked to target branch
+/// </summary>
 public class ConflictPredictor
 {
-    public record ConflictPrediction
-    {
-        public string File { get; init; } = "";
-        public List<CpCommit> ConflictingCommits { get; init; } = [];
-        public ConflictRisk Risk { get; init; }
-        public ConflictType Type { get; init; }
-        public string Description { get; init; } = "";
-        public List<ConflictDetail> Details { get; init; } = [];
-        public List<string> ResolutionSuggestions { get; init; } = [];
-    }
+    protected readonly ConflictPredictorOptions Options;
+    protected readonly ConflictRiskCalculator RiskCalculator;
 
-    public record ConflictDetail
+    public ConflictPredictor(ConflictPredictorOptions? options = null)
     {
-        public int LineNumber { get; init; }
-        public string ConflictingChange { get; init; } = "";
-        public string CommitSha { get; init; } = "";
-        public string Author { get; init; } = "";
-    }
-
-    public enum ConflictRisk { Low, Medium, High, Certain }
-
-    public enum ConflictType
-    {
-        ContentOverlap,     // Same lines modified
-        SemanticConflict,   // Related code changes
-        BinaryFile,         // Binary file conflicts
-        FileRenamed,        // File rename conflicts
-        StructuralChange,   // Major code structure changes
-        ImportConflict      // Import/using statement conflicts
+        Options = options ?? new ConflictPredictorOptions();
+        RiskCalculator = new ConflictRiskCalculator(Options.RiskOptions);
     }
 
     /// <summary>
@@ -46,7 +24,8 @@ public class ConflictPredictor
     public List<ConflictPrediction> PredictConflicts(
         string repositoryPath,
         List<CpCommit> commitsToCherry,
-        string targetBranch)
+        string targetBranch,
+        IConflictAnalysisDisplay? display = null)
     {
         using var repo = new Repository(repositoryPath);
         var predictions = new List<ConflictPrediction>();
@@ -58,324 +37,288 @@ public class ConflictPredictor
             throw new ArgumentException($"Target branch '{targetBranch}' not found");
         }
 
-        // Group commits by file for analysis
+        // Build caches once for performance
+        var oldestCommitTime = commitsToCherry.Min(c => c.Timestamp);
+        var targetCache = BuildTargetBranchCache(repo, targetBranchRef, oldestCommitTime);
         var fileCommitMap = BuildFileCommitMap(commitsToCherry);
 
-        // Beautiful progress display with Spectre.Console
-        var analysisResults = PerformConflictAnalysisWithProgress(repo, fileCommitMap, targetBranchRef);
-        predictions.AddRange(analysisResults);
+        // Notify display
+        display?.OnAnalysisStarted(fileCommitMap.Count);
 
-        // Add cross-file semantic conflict predictions
-        var semanticConflicts = AnsiConsole.Status()
-            .Spinner(Spinner.Known.Dots2)
-            .SpinnerStyle(Style.Parse("yellow"))
-            .Start("🔍 Analyzing semantic conflicts...", _ =>
-                PredictSemanticConflicts(commitsToCherry));
+        // Analyze each file
+        foreach (var (file, commits) in fileCommitMap)
+        {
+            try
+            {
+                var pred = AnalyzeFileConflicts(repo, file, commits, targetBranchRef, targetCache);
+                if (pred.Risk > ConflictRisk.Low)
+                {
+                    predictions.Add(pred);
+                }
+                display?.OnFileAnalyzed(file, pred.Risk > ConflictRisk.Low ? pred : null);
+            }
+            catch (Exception ex)
+            {
+                display?.OnError(file, ex.Message);
+            }
+        }
 
-        predictions.AddRange(semanticConflicts);
+        // Add semantic conflicts if enabled
+        if (Options.EnableSemanticConflictDetection)
+        {
+            var semanticConflicts = PredictSemanticConflicts(commitsToCherry);
+            predictions.AddRange(semanticConflicts);
+        }
 
-        // Show final summary
-        DisplayFinalSummary(predictions);
-
-        return predictions
+        // Sort and notify completion
+        var sortedPredictions = predictions
             .OrderByDescending(p => p.Risk)
+            .ThenByDescending(p => p.ConflictingCommits.Count)
+            .ToList();
+
+        display?.OnAnalysisCompleted(sortedPredictions);
+
+        return sortedPredictions;
+    }
+
+    /// <summary>
+    /// Async version with parallel processing
+    /// </summary>
+    public async Task<List<ConflictPrediction>> PredictConflictsAsync(
+        string repositoryPath,
+        List<CpCommit> commitsToCherry,
+        string targetBranch,
+        IProgress<ConflictAnalysisProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        using var repo = new Repository(repositoryPath);
+        var predictions = new ConcurrentBag<ConflictPrediction>();
+
+        var targetBranchRef = repo.Branches[targetBranch];
+        if (targetBranchRef == null)
+            throw new ArgumentException($"Target branch '{targetBranch}' not found");
+
+        // Build caches once
+        var oldestCommitTime = commitsToCherry.Min(c => c.Timestamp);
+        var targetCache = BuildTargetBranchCache(repo, targetBranchRef, oldestCommitTime);
+        var fileCommitMap = BuildFileCommitMap(commitsToCherry);
+
+        var processed = 0;
+        var total = fileCommitMap.Count;
+
+        if (Options.EnableParallelProcessing && fileCommitMap.Count > 10)
+        {
+            await Parallel.ForEachAsync(
+                fileCommitMap,
+                new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = Options.MaxDegreeOfParallelism,
+                    CancellationToken = cancellationToken
+                }, (kvp, ct) =>
+                {
+                    var (file, commits) = kvp;
+
+                    // Each thread needs its own repo instance
+                    using var threadRepo = new Repository(repositoryPath);
+                    var threadTargetBranch = threadRepo.Branches[targetBranch];
+
+                    try
+                    {
+                        var pred = AnalyzeFileConflicts(threadRepo, file, commits, threadTargetBranch!, targetCache);
+                        if (pred.Risk > ConflictRisk.Low)
+                            predictions.Add(pred);
+                    }
+                    catch
+                    {
+                        // Log error but continue processing
+                    }
+
+                    var current = Interlocked.Increment(ref processed);
+                    progress?.Report(new ConflictAnalysisProgress
+                    {
+                        ProcessedFiles = current,
+                        TotalFiles = total,
+                        CurrentFile = file,
+                        FoundConflicts = predictions.Count,
+                        PercentComplete = (current * 100.0) / total
+                    });
+                    return ValueTask.CompletedTask;
+                });
+        }
+        else
+        {
+            // Sequential processing for small sets
+            foreach (var (file, commits) in fileCommitMap)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                try
+                {
+                    var pred = AnalyzeFileConflicts(repo, file, commits, targetBranchRef, targetCache);
+                    if (pred.Risk > ConflictRisk.Low)
+                        predictions.Add(pred);
+                }
+                catch
+                {
+                    // Continue processing
+                }
+
+                processed++;
+                progress?.Report(new ConflictAnalysisProgress
+                {
+                    ProcessedFiles = processed,
+                    TotalFiles = total,
+                    CurrentFile = file,
+                    FoundConflicts = predictions.Count,
+                    PercentComplete = (processed * 100.0) / total
+                });
+            }
+        }
+
+        // Add semantic conflicts
+        if (Options.EnableSemanticConflictDetection)
+        {
+            var semanticConflicts = PredictSemanticConflicts(commitsToCherry);
+            foreach (var sc in semanticConflicts)
+                predictions.Add(sc);
+        }
+
+        return predictions.OrderByDescending(p => p.Risk)
             .ThenByDescending(p => p.ConflictingCommits.Count)
             .ToList();
     }
 
     /// <summary>
-    /// Perform conflict analysis with beautiful progress display
+    /// Build cache of target branch modifications
     /// </summary>
-    private List<ConflictPrediction> PerformConflictAnalysisWithProgress(
+    protected TargetBranchCache BuildTargetBranchCache(
         Repository repo,
-        Dictionary<string, List<CpCommit>> fileCommitMap,
-        Branch targetBranch)
+        Branch targetBranch,
+        DateTime oldestCommitTime)
     {
-        var predictions = new List<ConflictPrediction>();
-        var totalFiles = fileCommitMap.Count;
-        var processed = 0;
-        var display = new LiveDisplayRenderer();  // holds tree + progress node
+        var cache = new TargetBranchCache { OldestRelevantCommit = oldestCommitTime };
 
-        // Single Live block for both tree & progress
-        AnsiConsole.Live(display.DirectoryTree)
-            .AutoClear(false)
-            .Overflow(VerticalOverflow.Ellipsis)
-            .Cropping(VerticalOverflowCropping.Top)
-            .Start(ctx =>
+        var filter = new CommitFilter
+        {
+            IncludeReachableFrom = targetBranch,
+            SortBy = CommitSortStrategies.Time
+        };
+
+        var recentCommits = repo.Commits.QueryBy(filter)
+            .Where(c => c.Author.When.DateTime >= oldestCommitTime)
+            .Take(Options.MaxTargetCommitsToAnalyze);
+
+        foreach (var commit in recentCommits)
+        {
+            if (!commit.Parents.Any()) continue;
+
+            var parent = commit.Parents.First();
+            var changes = repo.Diff.Compare<TreeChanges>(parent.Tree, commit.Tree);
+
+            foreach (var change in changes)
             {
-                foreach (var (file, commits) in fileCommitMap)
+                cache.ModifiedFiles.Add(change.Path);
+
+                if (!cache.FileModifications.ContainsKey(change.Path))
+                    cache.FileModifications[change.Path] = [];
+
+                cache.FileModifications[change.Path].Add(new CommitInfo
                 {
-                    processed++;
+                    Sha = commit.Sha,
+                    Author = commit.Author.Name,
+                    When = commit.Author.When.DateTime,
+                    Message = commit.MessageShort
+                });
+            }
+        }
 
-                    // 1) Update the “X / total” indicator
-                    display.UpdateProgress(processed, totalFiles);
-
-                    // 2) Ensure directory node exists
-                    display.UpdateCurrentFile(file);
-
-                    // 3) Analyze and record
-                    try
-                    {
-                        var pred = AnalyzeFileConflicts(repo, file, commits, targetBranch);
-                        var added = pred.Risk > ConflictRisk.Low;
-                        display.AddResult(file, pred.Risk, pred.Type, pred.ConflictingCommits.Count, added);
-                        if (added) predictions.Add(pred);
-                    }
-                    catch (Exception ex)
-                    {
-                        display.AddError(file, ex.Message);
-                    }
-
-                    // 4) Redraw tree + progress
-                    ctx.UpdateTarget(display.DirectoryTree);
-                    ctx.Refresh();
-
-                    Thread.Sleep(50); // remove in production
-                }
-            });
-
-        return predictions;
+        return cache;
     }
 
     /// <summary>
-    /// Helper class for live display rendering during analysis
+    /// Analyze potential conflicts for a specific file
     /// </summary>
-    private class LiveDisplayRenderer
+    protected virtual ConflictPrediction AnalyzeFileConflicts(
+        Repository repo,
+        string filePath,
+        List<CpCommit> commits,
+        Branch targetBranch,
+        TargetBranchCache targetCache)
     {
-        private string _currentFile = "";
-        private string _currentDirectory = "";
-        private int _currentIndex = 0;
-        private int _totalFiles = 0;
-
-        // Tree structure for displaying files
-
-
-        private readonly TreeNode _progressNode;
-        public Tree DirectoryTree { get; }
-        private readonly Dictionary<string, TreeNode> _directoryNodes = new();
-        private string _lastDirectory = "";
-        public LiveDisplayRenderer()
+        try
         {
-            DirectoryTree = new Tree("[yellow]Files[/]");
-            _progressNode = DirectoryTree.AddNode("");
-        }
-        public void UpdateProgress(int processed, int total)
-        {
-            _progressNode.Nodes.Clear();
-            _progressNode.AddNode($"[green]{processed}[/] of [blue]{total}[/] files");
-        }
-        public void UpdateCurrentFile(string file)
-        {
-            var dir = Path.GetDirectoryName(file) ?? "/";
-            if (dir == _lastDirectory) return;
-            _lastDirectory = dir;
-            EnsureDirectoryNode(dir);
-        }
+            // Check if file was modified in target branch
+            var targetModified = targetCache.ModifiedFiles.Contains(filePath);
 
-        private TreeNode EnsureDirectoryNode(string directory)
-        {
-            var parts = directory
-                .Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
-
-            TreeNode? parent = null;
-
-            if (parts.Length == 0)
+            // For single commit, only conflict if target also modified the file
+            if (commits.Count == 1 && !targetModified)
             {
-                parts = [""];
-            }
-            var currentPath = "";
-            foreach (var part in parts)
-            {
-                currentPath = string.IsNullOrEmpty(currentPath)
-                    ? part
-                    : Path.Combine(currentPath, part);
-
-                if (!_directoryNodes.TryGetValue(currentPath, out var node))
+                return new ConflictPrediction
                 {
-                    node = parent == null
-                        ? DirectoryTree.AddNode($"[blue]{part}/[/]")
-                        : parent.AddNode($"[blue]{part}/[/]");
-
-                    _directoryNodes[currentPath] = node;
-                }
-
-                parent = node;
+                    File = filePath,
+                    ConflictingCommits = commits,
+                    Risk = ConflictRisk.Low,
+                    Type = ConflictType.ContentOverlap,
+                    Description = "Single commit, no recent target changes - low conflict risk"
+                };
             }
-            return parent!;
-        }
 
-        public void AddResult(string file, ConflictRisk risk, ConflictType type, int count, bool added)
-        {
-            if (!added || risk < ConflictRisk.Medium) return;
+            // Check if this is a binary file
+            var isBinary = IsBinaryFile(repo, filePath, commits.First());
 
-            var node = EnsureDirectoryNode(Path.GetDirectoryName(file) ?? "/");
-            var emoji = GetTypeEmoji(type);
-            var color = GetRiskColor(risk);
-            var name = Path.GetFileName(file);
-            node.AddNode($"{emoji} [{color}]{name}[/] - {risk} | {count} commits");
-        }
-
-        public void AddError(string file, string error)
-        {
-            // Errors go straight to console below the tree
-            AnsiConsole.MarkupLine($"[red]⚠ {file}:[/] {error}");
-        }
-
-        private string GetRiskColor(ConflictRisk r) => r switch
-        {
-            ConflictRisk.Certain => "red bold",
-            ConflictRisk.High => "red",
-            ConflictRisk.Medium => "yellow",
-            _ => "green"
-        };
-
-        private static string GetTypeEmoji(ConflictType t) => t switch
-        {
-            ConflictType.BinaryFile => "📦",
-            ConflictType.ImportConflict => "📚",
-            ConflictType.StructuralChange => "🏗️",
-            ConflictType.SemanticConflict => "🧠",
-            ConflictType.FileRenamed => "📝",
-            _ => "⚡"
-        };
-    }
-
-    /// <summary>
-    /// Display beautiful final summary
-    /// </summary>
-    private void DisplayFinalSummary(List<ConflictPrediction> predictions)
-    {
-        if (!predictions.Any())
-        {
-            AnsiConsole.MarkupLine("\n[green]✓ No significant conflicts predicted![/]");
-            return;
-        }
-
-        // Create summary table
-        var table = new Table();
-        table.AddColumn("[bold]File[/]");
-        table.AddColumn("[bold]Risk[/]");
-        table.AddColumn("[bold]Type[/]");
-        table.AddColumn("[bold]Commits[/]");
-        table.AddColumn("[bold]Details[/]");
-
-        // Add high and medium risk predictions to table
-        var importantPredictions = predictions
-            .Where(p => p.Risk >= ConflictRisk.Medium)
-            .Take(10) // Show top 10
-            .ToList();
-
-        foreach (var prediction in importantPredictions)
-        {
-            var riskColor = GetRiskColor(prediction.Risk);
-            var typeEmoji = GetTypeEmoji(prediction.Type);
-
-            table.AddRow(
-                $"[blue]{Path.GetFileName(prediction.File)}[/]",
-                $"[{riskColor}]{prediction.Risk}[/]",
-                $"{typeEmoji} {prediction.Type}",
-                prediction.ConflictingCommits.Count.ToString(),
-                prediction.Details.Count > 0 ? $"{prediction.Details.Count} line conflicts" : "File-level conflict"
-            );
-        }
-
-        // Create summary panel
-        var summaryText = new StringBuilder();
-        summaryText.AppendLine($"[green]Total Predictions:[/] {predictions.Count}");
-        summaryText.AppendLine($"[red]High Risk:[/] {predictions.Count(p => p.Risk >= ConflictRisk.High)}");
-        summaryText.AppendLine($"[yellow]Medium Risk:[/] {predictions.Count(p => p.Risk == ConflictRisk.Medium)}");
-        summaryText.AppendLine($"[green]Low Risk:[/] {predictions.Count(p => p.Risk == ConflictRisk.Low)}");
-
-        var summaryPanel = new Panel(summaryText.ToString())
-        {
-            Header = new PanelHeader("🎯 Conflict Analysis Summary"),
-            Border = BoxBorder.Rounded,
-            BorderStyle = Style.Parse("blue")
-        };
-
-        // Display results
-        AnsiConsole.WriteLine();
-        AnsiConsole.Write(summaryPanel);
-
-        if (importantPredictions.Any())
-        {
-            AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("[bold yellow]⚠️  Significant Conflicts Detected:[/]");
-            AnsiConsole.Write(table);
-        }
-
-        // Show recommendations for high-risk conflicts
-        var highRiskConflicts = predictions.Where(p => p.Risk >= ConflictRisk.High).ToList();
-        if (highRiskConflicts.Any())
-        {
-            AnsiConsole.WriteLine();
-            var recommendationsPanel = new Panel(GenerateConflictRecommendations(highRiskConflicts))
+            // Analyze line-level conflicts for text files
+            var conflictDetails = new List<ConflictDetail>();
+            if (!isBinary && Options.EnableLineConflictDetection)
             {
-                Header = new PanelHeader("💡 Recommendations"),
-                Border = BoxBorder.Rounded,
-                BorderStyle = Style.Parse("yellow")
+                conflictDetails = AnalyzeLineConflicts(repo, filePath, commits);
+            }
+
+            // Determine conflict type and risk
+            var conflictType = DetermineConflictType(filePath, conflictDetails, isBinary);
+
+            var riskFactors = new ConflictRiskFactors
+            {
+                CommitCount = commits.Count,
+                AuthorCount = commits.Select(c => c.Author).Distinct().Count(),
+                TimeSpanDays = (commits.Max(c => c.Timestamp) - commits.Min(c => c.Timestamp)).TotalDays,
+                LineConflictCount = conflictDetails.Count,
+                IsTargetModified = targetModified,
+                IsBinaryFile = isBinary,
+                IsCriticalFile = IsCriticalFile(filePath)
             };
-            AnsiConsole.Write(recommendationsPanel);
-        }
-    }
 
-    /// <summary>
-    /// Generate recommendations for high-risk conflicts
-    /// </summary>
-    private string GenerateConflictRecommendations(List<ConflictPrediction> highRiskConflicts)
-    {
-        var recommendations = new StringBuilder();
+            var risk = RiskCalculator.CalculateRisk(riskFactors);
 
-        recommendations.AppendLine("[bold red]High-risk conflicts require attention:[/]");
-        recommendations.AppendLine();
-
-        foreach (var conflict in highRiskConflicts.Take(5))
-        {
-            recommendations.AppendLine($"[red]•[/] [blue]{conflict.File}[/]");
-
-            if (conflict.ResolutionSuggestions.Any())
+            return new ConflictPrediction
             {
-                var suggestion = conflict.ResolutionSuggestions.First();
-                recommendations.AppendLine($"  💡 {suggestion}");
-            }
-            recommendations.AppendLine();
+                File = filePath,
+                ConflictingCommits = commits,
+                Risk = risk,
+                Type = conflictType,
+                Description = GenerateRiskDescription(filePath, commits, risk, targetModified),
+                Details = conflictDetails,
+                ResolutionSuggestions = GenerateResolutionSuggestions(conflictType),
+                TargetModifications = targetCache.FileModifications.GetValueOrDefault(filePath, [])
+            };
         }
-
-        recommendations.AppendLine("[yellow]Consider:[/]");
-        recommendations.AppendLine("• Review conflicts manually before cherry-picking");
-        recommendations.AppendLine("• Cherry-pick in smaller batches");
-        recommendations.AppendLine("• Coordinate with file authors");
-
-        return recommendations.ToString();
+        catch (Exception ex)
+        {
+            // If we can't analyze the file, assume medium risk
+            return new ConflictPrediction
+            {
+                File = filePath,
+                ConflictingCommits = commits,
+                Risk = ConflictRisk.Medium,
+                Type = ConflictType.ContentOverlap,
+                Description = $"Unable to analyze file: {ex.Message}"
+            };
+        }
     }
-
-    // Helper methods for styling
-    private string GetRiskColor(ConflictRisk risk) => risk switch
-    {
-        ConflictRisk.Certain => "red bold",
-        ConflictRisk.High => "red",
-        ConflictRisk.Medium => "yellow",
-        ConflictRisk.Low => "green",
-        _ => "grey"
-    };
-
-    private string GetTypeEmoji(ConflictType type) => type switch
-    {
-        ConflictType.BinaryFile => "📦",
-        ConflictType.StructuralChange => "🏗️",
-        ConflictType.ImportConflict => "📚",
-        ConflictType.SemanticConflict => "🧠",
-        ConflictType.FileRenamed => "📝",
-        ConflictType.ContentOverlap => "⚡",
-        _ => "❓"
-    };
-
-    // [Keep all your existing private methods here - they're good as-is]
 
     /// <summary>
     /// Build mapping of files to commits that modify them
     /// </summary>
-    private static Dictionary<string, List<CpCommit>> BuildFileCommitMap(List<CpCommit> commits)
+    protected static Dictionary<string, List<CpCommit>> BuildFileCommitMap(List<CpCommit> commits)
     {
         var fileCommitMap = new Dictionary<string, List<CpCommit>>();
 
@@ -393,116 +336,56 @@ public class ConflictPredictor
     }
 
     /// <summary>
-    /// Analyze potential conflicts for a specific file
+    /// Check if file is binary
     /// </summary>
-    private ConflictPrediction AnalyzeFileConflicts(
-        Repository repo,
-        string filePath,
-        List<CpCommit> commits,
-        Branch targetBranch)
+    protected bool IsBinaryFile(Repository repo, string filePath, CpCommit commit)
     {
         try
         {
-            // Check if file was modified in target branch recently
-            var targetModified = WasFileModifiedInTarget(repo, filePath, targetBranch, commits);
-
-            // For single commit, only conflict if target also modified the file
-            if (commits.Count == 1 && !targetModified)
+            var libCommit = repo.Lookup<Commit>(commit.Sha);
+            var entry = libCommit?[filePath];
+            if (entry?.TargetType == TreeEntryTargetType.Blob)
             {
-                return new ConflictPrediction
-                {
-                    File = filePath,
-                    ConflictingCommits = commits,
-                    Risk = ConflictRisk.Low,
-                    Type = ConflictType.ContentOverlap,
-                    Description = "Single commit, no recent target changes - low conflict risk"
-                };
+                var blob = (Blob)entry.Target;
+                return blob.IsBinary;
             }
-
-            // Analyze line-level conflicts for multiple commits
-            var conflictDetails = AnalyzeLineConflicts(repo, filePath, commits);
-            var conflictType = DetermineConflictType(filePath, conflictDetails);
-            var risk = CalculateConflictRisk(filePath, commits, targetModified, conflictDetails);
-
-            return new ConflictPrediction
-            {
-                File = filePath,
-                ConflictingCommits = commits,
-                Risk = risk,
-                Type = conflictType,
-                Description = GenerateRiskDescription(filePath, commits, risk, targetModified),
-                Details = conflictDetails,
-                ResolutionSuggestions = GenerateResolutionSuggestions(conflictType)
-            };
         }
-        catch (Exception)
-        {
-            // If we can't analyze the file, assume medium risk
-            return new ConflictPrediction
-            {
-                File = filePath,
-                ConflictingCommits = commits,
-                Risk = ConflictRisk.Medium,
-                Type = ConflictType.ContentOverlap,
-                Description = "Unable to analyze file - assume medium risk"
-            };
-        }
+        catch { }
+
+        // Fallback to extension check
+        var binaryExtensions = new[] { ".dll", ".exe", ".pdf", ".jpg", ".png", ".gif", ".zip", ".tar", ".gz" };
+        return binaryExtensions.Contains(Path.GetExtension(filePath).ToLowerInvariant());
     }
 
     /// <summary>
-    /// Check if file was modified in target branch since the oldest commit being cherry-picked
+    /// Check if file is critical (build files, configs, etc)
     /// </summary>
-    private bool WasFileModifiedInTarget(Repository repo, string filePath, Branch targetBranch, List<CpCommit> commits)
+    protected bool IsCriticalFile(string filePath)
     {
-        try
+        var fileName = Path.GetFileName(filePath).ToLowerInvariant();
+        var criticalPatterns = new[]
         {
-            var oldestCommitTime = commits.Min(c => c.Timestamp);
+            "package.json", "pom.xml", ".csproj", ".sln",
+            "dockerfile", "docker-compose", ".gitignore",
+            "appsettings.json", "web.config", "app.config"
+        };
 
-            // Get commits in target branch since the oldest commit time
-            var filter = new CommitFilter
-            {
-                IncludeReachableFrom = targetBranch,
-                SortBy = CommitSortStrategies.Time
-            };
-
-            var recentTargetCommits = repo.Commits.QueryBy(filter)
-                .Where(c => c.Author.When.DateTime >= oldestCommitTime)
-                .Take(100); // Limit to avoid performance issues
-
-            // Check if any recent target commits modified this file
-            foreach (var commit in recentTargetCommits)
-            {
-                if (!commit.Parents.Any()) continue;
-
-                var parent = commit.Parents.First();
-                var changes = repo.Diff.Compare<TreeChanges>(parent.Tree, commit.Tree);
-
-                if (changes.Any(change => change.Path == filePath))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-        catch
-        {
-            return true; // Assume conflict risk if we can't determine
-        }
+        return criticalPatterns.Any(pattern => fileName.Contains(pattern));
     }
+
+    // Add these methods to ConflictPredictor.cs
 
     /// <summary>
     /// Analyze line-level conflicts between commits
     /// </summary>
-    private List<ConflictDetail> AnalyzeLineConflicts(Repository repo, string filePath, List<CpCommit> commits)
+    protected List<ConflictDetail> AnalyzeLineConflicts(Repository repo, string filePath, List<CpCommit> commits)
     {
-        var details = new List<ConflictDetail>();
+        var allChanges = new List<LineChange>();
+        var conflictDetails = new List<ConflictDetail>();
 
-        try
+        foreach (var commit in commits)
         {
-            var lineModifications = new Dictionary<int, List<(CpCommit commit, string change)>>();
-
-            foreach (var commit in commits)
+            try
             {
                 var libCommit = repo.Lookup<Commit>(commit.Sha);
                 if (libCommit?.Parents?.Any() != true) continue;
@@ -514,88 +397,184 @@ public class ConflictPredictor
                 {
                     if (patchEntry.Path != filePath) continue;
 
-                    // Parse patch to find modified lines
-                    var modifiedLines = ParseModifiedLines(patchEntry.Patch);
-                    foreach (var (lineNum, change) in modifiedLines)
-                    {
-                        if (!lineModifications.ContainsKey(lineNum))
-                            lineModifications[lineNum] = [];
-
-                        lineModifications[lineNum].Add((commit, change));
-                    }
+                    var changes = ParsePatchWithContext(patchEntry.Patch, commit);
+                    allChanges.AddRange(changes);
                 }
             }
-
-            // Find lines modified by multiple commits
-            foreach (var (lineNum, modifications) in lineModifications.Where(kvp => kvp.Value.Count > 1))
+            catch
             {
-                foreach (var (commit, change) in modifications)
+                // Continue with other commits
+            }
+        }
+
+        // Find overlapping changes
+        var lineGroups = allChanges
+            .GroupBy(c => c.LineRange)
+            .Where(g => g.Select(c => c.CommitSha).Distinct().Count() > 1);
+
+        foreach (var group in lineGroups)
+        {
+            // Check if changes are actually conflicting
+            var distinctContents = group.Select(c => c.Content).Distinct().ToList();
+            if (distinctContents.Count > 1) // Different changes to same lines
+            {
+                foreach (var change in group)
                 {
-                    details.Add(new ConflictDetail
+                    conflictDetails.Add(new ConflictDetail
                     {
-                        LineNumber = lineNum,
-                        ConflictingChange = change,
-                        CommitSha = commit.Sha,
-                        Author = commit.Author
+                        LineNumber = change.LineRange.Start,
+                        ConflictingChange = change.Content,
+                        CommitSha = change.CommitSha,
+                        Author = change.Author,
+                        ChangeType = change.Type
                     });
                 }
             }
         }
-        catch
-        {
-            // If we can't parse line details, return empty list
-        }
 
-        return details;
+        return conflictDetails;
     }
 
     /// <summary>
-    /// Parse patch text to extract modified line numbers and changes
+    /// Parse patch text to extract changes with context
     /// </summary>
-    private List<(int lineNumber, string change)> ParseModifiedLines(string patchText)
+    protected List<LineChange> ParsePatchWithContext(string patchText, CpCommit commit)
     {
-        var modifications = new List<(int, string)>();
+        var changes = new List<LineChange>();
         var lines = patchText.Split('\n');
-        var currentLineNumber = 0;
+        var currentHunk = new HunkInfo();
 
         foreach (var line in lines)
         {
             if (line.StartsWith("@@"))
             {
                 // Parse hunk header: @@ -1,4 +1,6 @@
-                var match = System.Text.RegularExpressions.Regex.Match(line, @"@@\s*-\d+,?\d*\s*\+(\d+),?\d*\s*@@");
-                if (match.Success && int.TryParse(match.Groups[1].Value, out int startLine))
-                {
-                    currentLineNumber = startLine;
-                }
+                currentHunk = ParseHunkHeader(line);
             }
             else if (line.StartsWith("+") && !line.StartsWith("+++"))
             {
-                modifications.Add((currentLineNumber, line.Substring(1)));
-                currentLineNumber++;
+                changes.Add(new LineChange
+                {
+                    LineRange = new LineRange(currentHunk.NewStart, currentHunk.NewStart),
+                    Content = line.Substring(1),
+                    Type = ChangeType.Addition,
+                    CommitSha = commit.Sha,
+                    Author = commit.Author
+                });
+                currentHunk.NewStart++;
+            }
+            else if (line.StartsWith("-") && !line.StartsWith("---"))
+            {
+                changes.Add(new LineChange
+                {
+                    LineRange = new LineRange(currentHunk.OldStart, currentHunk.OldStart),
+                    Content = line.Substring(1),
+                    Type = ChangeType.Deletion,
+                    CommitSha = commit.Sha,
+                    Author = commit.Author
+                });
+                currentHunk.OldStart++;
             }
             else if (line.StartsWith(" "))
             {
-                currentLineNumber++;
+                currentHunk.OldStart++;
+                currentHunk.NewStart++;
             }
         }
 
-        return modifications;
+        return changes;
+    }
+
+    /// <summary>
+    /// Parse hunk header to get line numbers
+    /// </summary>
+    protected HunkInfo ParseHunkHeader(string header)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(
+            header,
+            @"@@\s*-(\d+)(?:,(\d+))?\s*\+(\d+)(?:,(\d+))?\s*@@");
+
+        if (match.Success)
+        {
+            return new HunkInfo
+            {
+                OldStart = int.Parse(match.Groups[1].Value),
+                OldCount = match.Groups[2].Success ? int.Parse(match.Groups[2].Value) : 1,
+                NewStart = int.Parse(match.Groups[3].Value),
+                NewCount = match.Groups[4].Success ? int.Parse(match.Groups[4].Value) : 1
+            };
+        }
+
+        return new HunkInfo();
+    }
+
+    /// <summary>
+    /// Predict semantic conflicts across files
+    /// </summary>
+    protected List<ConflictPrediction> PredictSemanticConflicts(List<CpCommit> commits)
+    {
+        var predictions = new List<ConflictPrediction>();
+
+        // Look for commits that modify related files (same namespace/package)
+        var relatedFileGroups = commits
+            .SelectMany(c => c.ModifiedFiles.Select(f => new { File = f, Commit = c }))
+            .GroupBy(x => GetFileNamespace(x.File))
+            .Where(g => g.Select(x => x.Commit).Distinct().Count() > 1)
+            .ToList();
+
+        foreach (var group in relatedFileGroups)
+        {
+            var groupCommits = group.Select(x => x.Commit).Distinct().ToList();
+            var files = group.Select(x => x.File).Distinct().ToList();
+
+            predictions.Add(new ConflictPrediction
+            {
+                File = $"Namespace: {group.Key}",
+                RelatedFiles = files,
+                ConflictingCommits = groupCommits,
+                Risk = ConflictRisk.Medium,
+                Type = ConflictType.SemanticConflict,
+                Description = $"Multiple commits modify {files.Count} related files in namespace '{group.Key}'",
+                ResolutionSuggestions =
+                [
+                    "Review changes for API compatibility",
+                    "Test integration after cherry-pick",
+                    "Consider cherry-picking commits in dependency order"
+                ]
+            });
+        }
+
+        return predictions;
+    }
+
+    /// <summary>
+    /// Extract namespace/package from file path
+    /// </summary>
+    protected string GetFileNamespace(string filePath)
+    {
+        var directory = Path.GetDirectoryName(filePath) ?? "";
+        var parts = directory.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        // Skip common root directories
+        var skipDirs = new[] { "src", "source", "lib", "test", "tests" };
+        var relevantParts = parts.Where(p => !skipDirs.Contains(p.ToLowerInvariant())).ToList();
+
+        // Return the most specific namespace (last 2-3 directories)
+        var takeCount = Math.Min(3, relevantParts.Count);
+        return string.Join(".", relevantParts.Skip(Math.Max(0, relevantParts.Count - takeCount)));
     }
 
     /// <summary>
     /// Determine the type of conflict based on file and changes
     /// </summary>
-    private ConflictType DetermineConflictType(string filePath, List<ConflictDetail> details)
+    protected ConflictType DetermineConflictType(string filePath, List<ConflictDetail> details, bool isBinary)
     {
-        var extension = Path.GetExtension(filePath).ToLowerInvariant();
-
-        // Binary files
-        var binaryExtensions = new[] { ".dll", ".exe", ".pdf", ".jpg", ".png", ".gif", ".zip", ".tar", ".gz" };
-        if (binaryExtensions.Contains(extension))
+        if (isBinary)
         {
             return ConflictType.BinaryFile;
         }
+
+        var extension = Path.GetExtension(filePath).ToLowerInvariant();
 
         // Check for import/using conflicts
         if (details.Any(d => d.ConflictingChange.Contains("using ") ||
@@ -609,147 +588,26 @@ public class ConflictPredictor
         if (details.Any(d => d.ConflictingChange.Contains("class ") ||
                             d.ConflictingChange.Contains("interface ") ||
                             d.ConflictingChange.Contains("function ") ||
-                            d.ConflictingChange.Contains("def ")))
+                            d.ConflictingChange.Contains("def ") ||
+                            d.ConflictingChange.Contains("public ") ||
+                            d.ConflictingChange.Contains("private ")))
         {
             return ConflictType.StructuralChange;
+        }
+
+        // Check for file renames
+        if (details.Any(d => d.ChangeType == ChangeType.Rename))
+        {
+            return ConflictType.FileRenamed;
         }
 
         return ConflictType.ContentOverlap;
     }
 
     /// <summary>
-    /// Calculate conflict risk with improved logic
-    /// </summary>
-    private ConflictRisk CalculateConflictRisk(
-        string filePath,
-        List<CpCommit> commits,
-        bool targetModified,
-        List<ConflictDetail> conflictDetails)
-    {
-        var riskScore = 0.0;
-
-        // Base risk for multiple commits on same file - more granular
-        if (commits.Count > 1)
-            riskScore += (commits.Count - 1) * 0.5;
-
-        // Time span risk - more granular
-        var timeSpan = commits.Max(c => c.Timestamp) - commits.Min(c => c.Timestamp);
-        if (timeSpan.TotalDays > 30) riskScore += 2;
-        else if (timeSpan.TotalDays > 14) riskScore += 1.5;
-        else if (timeSpan.TotalDays > 7) riskScore += 1;
-        else if (timeSpan.TotalDays > 3) riskScore += 0.5;
-
-        // Multiple authors risk - consider author overlap
-        var authors = commits.Select(c => c.Author).Distinct().ToList();
-        if (authors.Count > 1) 
-        {
-            riskScore += (authors.Count - 1) * 0.75;
-
-            // Bonus risk if no common authors (less coordination)
-            var hasCommonAuthor = false;
-            foreach (var author in authors)
-            {
-                if (commits.Count(c => c.Author == author) > 1)
-                {
-                    hasCommonAuthor = true;
-                    break;
-                }
-            }
-            if (!hasCommonAuthor) riskScore += 1;
-        }
-
-        // Target branch modifications - major factor
-        if (targetModified) riskScore += 4;
-
-        // Line-level conflicts - weighted by severity
-        riskScore += conflictDetails.Count * 0.3;
-
-        // File type specific risks
-        var extension = Path.GetExtension(filePath).ToLowerInvariant();
-        var fileName = Path.GetFileName(filePath).ToLowerInvariant();
-
-        // Critical files get higher risk
-        if (new[] { "package.json", "pom.xml", ".csproj", ".sln" }.Any(pattern => fileName.EndsWith(pattern)))
-            riskScore += 2;
-
-        // Binary files
-        if (new[] { ".dll", ".exe", ".jar", ".zip", ".pdf" }.Contains(extension))
-            riskScore += 3;
-
-        // Generated files - lower risk
-        if (filePath.Contains("/bin/") || filePath.Contains("/obj/") || filePath.Contains("/target/") || 
-            filePath.Contains("\\bin\\") || filePath.Contains("\\obj\\") || filePath.Contains("\\target\\"))
-            riskScore *= 0.5;
-
-        // Test files - slightly lower risk
-        if (filePath.Contains("/test/") || filePath.Contains("\\test\\") || 
-            fileName.Contains(".test.") || fileName.Contains(".spec."))
-            riskScore *= 0.8;
-
-        return riskScore switch
-        {
-            >= 10 => ConflictRisk.Certain,
-            >= 6 => ConflictRisk.High,
-            >= 3 => ConflictRisk.Medium,
-            _ => ConflictRisk.Low
-        };
-    }
-
-    /// <summary>
-    /// Predict semantic conflicts across files
-    /// </summary>
-    private List<ConflictPrediction> PredictSemanticConflicts(List<CpCommit> commits)
-    {
-        var predictions = new List<ConflictPrediction>();
-
-        // Look for commits that modify related files (same namespace/package)
-        var relatedFileGroups = commits
-            .SelectMany(c => c.ModifiedFiles.Select(f => new { File = f, Commit = c }))
-            .GroupBy(x => GetFileNamespace(x.File))
-            .Where(g => g.Count() > 1)
-            .ToList();
-
-        foreach (var group in relatedFileGroups)
-        {
-            var groupCommits = group.Select(x => x.Commit).Distinct().ToList();
-            if (groupCommits.Count > 1)
-            {
-                predictions.Add(new ConflictPrediction
-                {
-                    File = $"Namespace: {group.Key}",
-                    ConflictingCommits = groupCommits,
-                    Risk = ConflictRisk.Medium,
-                    Type = ConflictType.SemanticConflict,
-                    Description = $"Multiple commits modify related files in namespace '{group.Key}'",
-                    ResolutionSuggestions =
-                    [
-                        "Review changes for API compatibility",
-                        "Test integration after cherry-pick",
-                        "Consider cherry-picking commits in dependency order"
-                    ]
-                });
-            }
-        }
-
-        return predictions;
-    }
-
-    /// <summary>
-    /// Extract namespace/package from file path
-    /// </summary>
-    private string GetFileNamespace(string filePath)
-    {
-        var directory = Path.GetDirectoryName(filePath) ?? "";
-        var parts = directory.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-        // Return the most specific namespace (last 2 directories)
-        return string.Join(".", parts.Skip(Math.Max(0, parts.Length - 2)));
-    }
-
-    /// <summary>
     /// Generate resolution suggestions based on conflict type
     /// </summary>
-    private List<string> GenerateResolutionSuggestions(ConflictType type)
+    protected List<string> GenerateResolutionSuggestions(ConflictType type)
     {
         return type switch
         {
@@ -777,6 +635,12 @@ public class ConflictPredictor
                 "Review for breaking API changes",
                 "Consider cherry-picking in dependency order"
             ],
+            ConflictType.FileRenamed =>
+            [
+                "Check if file was renamed in both branches",
+                "Update import/reference paths",
+                "Verify build system recognizes new paths"
+            ],
             _ =>
             [
                 "Review conflicting lines manually",
@@ -789,13 +653,56 @@ public class ConflictPredictor
     /// <summary>
     /// Generate detailed risk description
     /// </summary>
-    private string GenerateRiskDescription(string file, List<CpCommit> commits, ConflictRisk risk, bool targetModified)
+    protected string GenerateRiskDescription(string file, List<CpCommit> commits, ConflictRisk risk, bool targetModified)
     {
-        var authors = string.Join(", ", commits.Select(c => c.Author).Distinct());
+        var authors = commits.Select(c => c.Author).Distinct().ToList();
         var timeSpan = commits.Max(c => c.Timestamp) - commits.Min(c => c.Timestamp);
         var targetNote = targetModified ? " Also modified in target branch." : "";
 
-        return $"File '{file}' modified by {commits.Count} commits (risk: {risk}). " +
-               $"Authors: {authors}. Span: {timeSpan.TotalDays:F1} days.{targetNote}";
+        var description = $"File modified by {commits.Count} commits";
+
+        if (authors.Count > 1)
+            description += $" from {authors.Count} authors";
+
+        if (timeSpan.TotalDays > 1)
+            description += $" over {timeSpan.TotalDays:F0} days";
+
+        description += $".{targetNote}";
+
+        return description;
     }
+
+    // Helper classes
+    protected class TargetBranchCache
+    {
+        public HashSet<string> ModifiedFiles { get; set; } = [];
+        public Dictionary<string, List<CommitInfo>> FileModifications { get; set; } = new();
+        public DateTime OldestRelevantCommit { get; set; }
+    }
+
+    protected class LineChange
+    {
+        public LineRange LineRange { get; set; } = new(0, 0);
+        public string Content { get; set; } = "";
+        public ChangeType Type { get; set; }
+        public string CommitSha { get; set; } = "";
+        public string Author { get; set; } = "";
+    }
+
+    protected class HunkInfo
+    {
+        public int OldStart { get; set; }
+        public int OldCount { get; set; }
+        public int NewStart { get; set; }
+        public int NewCount { get; set; }
+    }
+
+    protected record LineRange(int Start, int End)
+    {
+        public bool Overlaps(LineRange other)
+        {
+            return Start <= other.End && End >= other.Start;
+        }
+    }
+
 }

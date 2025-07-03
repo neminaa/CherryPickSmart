@@ -1,12 +1,10 @@
-using System.Collections.Generic;
-
 namespace CherryPickSmart.Models.Configuration
 {
     public class ApplicationSettings
     {
         public JiraSettings Jira { get; set; } = new();
         public GitSettings Git { get; set; } = new();
-        public List<string> TicketPrefixes { get; set; } = new() { "HSAMED" };
+        public List<string> TicketPrefixes { get; set; } = ["HSAMED"];
     }
 
     public class JiraSettings

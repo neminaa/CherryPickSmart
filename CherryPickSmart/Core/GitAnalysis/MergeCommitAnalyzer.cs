@@ -231,7 +231,7 @@ public class MergeCommitAnalyzer
     /// <summary>
     /// Determine the source and target branches for a merge commit
     /// </summary>
-    private (string? targetBranch, string? sourceBranch) 
+    private static (string? targetBranch, string? sourceBranch) 
         DetermineMergeBranches(CpCommitGraph graph, CpCommit mergeCommit)
     {
 

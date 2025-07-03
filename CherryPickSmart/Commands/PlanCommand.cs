@@ -8,7 +8,6 @@ using CommandLine;
 using Microsoft.Extensions.DependencyInjection;
 using Spectre.Console;
 using System.Text.Json;
-using static CherryPickSmart.Core.ConflictAnalysis.ConflictPredictor;
 
 namespace CherryPickSmart.Commands;
 
@@ -23,7 +22,7 @@ public class PlanCommand : ICommand
 
     [Option("auto-infer", HelpText = "Automatically accept high-confidence inferences")]
     public bool AutoInfer { get; set; }
-    
+
     [Option('r', "repo", Required = true, HelpText = "Path to the repository")]
     public string RepositoryPath { get; set; } = "";
 
@@ -66,9 +65,6 @@ public class PlanCommand : ICommand
             Dictionary<string, List<CpCommit>> ticketMap = null!;
             Dictionary<string, JiraClient.JiraTicket> ticketInfos = null!;
             List<OrphanCommitDetector.OrphanCommit> orphans = null!;
-            List<CpCommit> selectedCommits = null!;
-            List<ConflictPrediction> conflicts = null!;
-            List<CherryPickStep> plan = null!;
 
             await AnsiConsole.Status()
                 .Spinner(Spinner.Known.Dots)
@@ -97,7 +93,7 @@ public class PlanCommand : ICommand
                     var inferenceEngine = services.GetRequiredService<TicketInferenceEngine>();
                     orphans = orphanDetector.FindOrphans(graph, ticketMap);
 
-                    if (orphans.Any())
+                    if (orphans.Count > 0)
                     {
                         ctx.Status($"🤖 Generating suggestions for {orphans.Count} orphan commits...");
 
@@ -106,7 +102,7 @@ public class PlanCommand : ICommand
 
                         foreach (var orphan in orphans)
                         {
-                            var suggestions = await inferenceEngine.GenerateSuggestionsAsync(analysis,orphan, graph, ticketMap);
+                            var suggestions = await inferenceEngine.GenerateSuggestionsAsync(analysis, orphan, graph, ticketMap);
                             orphan.Suggestions.AddRange(suggestions);
                         }
                     }
@@ -114,10 +110,10 @@ public class PlanCommand : ICommand
 
             // Interactive sections
             AnsiConsole.WriteLine();
-            
+
             // Process orphan assignments
             Dictionary<CpCommit, string> orphanAssignments = new();
-            if (orphans.Any())
+            if (orphans.Count > 0)
             {
                 var orphanPanel = new Panel(new Markup($"[yellow]Found {orphans.Count} orphaned commits without ticket associations.[/]\n" +
                                                       $"[dim]These commits need to be assigned to tickets for proper tracking.[/]"))
@@ -147,24 +143,52 @@ public class PlanCommand : ICommand
 
             // Get commits for selected tickets
             AnsiConsole.WriteLine("📋 Gathering commits for selected tickets...");
-                    selectedCommits = GetCommitsForTickets(selectedTickets, ticketMap, orphanAssignments);
+            var selectedCommits = GetCommitsForTickets(selectedTickets, ticketMap, orphanAssignments);
 
             // Predict conflicts
-            AnsiConsole.WriteLine("⚠️  Predicting potential conflicts...");
-                    var conflictPredictor = services.GetRequiredService<ConflictPredictor>();
-                    conflicts = conflictPredictor.PredictConflicts(RepositoryPath, selectedCommits, ToBranch);
-
+            var conflicts = await ConflictPredictorIntegration.PredictConflictsWithStatusAsync(
+                RepositoryPath, 
+                selectedCommits, 
+                ToBranch,
+                new ConflictPredictorOptions
+                {
+                    MaxDegreeOfParallelism = 4
+                });
+            
             // Detect empty commits
-            AnsiConsole.WriteLine("🔍 Detecting empty commits...");
-                    var emptyDetector = new EmptyCommitDetector(RepositoryPath);
-                    var emptyCommits = emptyDetector.DetectEmptyCommits(selectedCommits, ToBranch);
+            Dictionary<string, EmptyCommitInfo> emptyCommits = null!;
+            EmptyCommitDetectionResult emptyDetectionResult;
+
+            await AnsiConsole.Status()
+                .Spinner(Spinner.Known.Dots)
+                .SpinnerStyle(Style.Parse("yellow"))
+                .StartAsync("🔍 Detecting empty commits...", async ctx =>
+                {
+                    var progress = new Progress<DetectionProgress>(p =>
+                    {
+                        ctx.Status($"🔍 Detecting empty commits... {p.PercentComplete:F0}% ({p.ProcessedCommits}/{p.TotalCommits})");
+                    });
+
+                    var emptyDetector = new EmptyCommitDetector(RepositoryPath, new EmptyCommitDetectorOptions
+                    {
+                        UseParallelProcessing = selectedCommits.Count > 20, // Only use parallel for larger sets
+                        MaxDegreeOfParallelism = 4
+                    });
+
+                    emptyDetectionResult = await emptyDetector.DetectEmptyCommitsParallelAsync(
+                        selectedCommits,
+                        ToBranch,
+                        progress);
+
+                    emptyCommits = emptyDetectionResult.EmptyCommits;
+                });
 
             // Optimize order
             AnsiConsole.WriteLine("🔧 Optimizing cherry-pick order...");
-                    var optimizer = services.GetRequiredService<OrderOptimizer>();
-                    var mergeAnalyzer = services.GetRequiredService<MergeCommitAnalyzer>();
-                    var mergeAnalyses = mergeAnalyzer.AnalyzeMerges(graph, targetCommits);
-                    plan = optimizer.OptimizeOrder(selectedCommits, mergeAnalyses, conflicts,FromBranch);
+            var optimizer = services.GetRequiredService<OrderOptimizer>();
+            var mergeAnalyzer = services.GetRequiredService<MergeCommitAnalyzer>();
+            var mergeAnalyses = mergeAnalyzer.AnalyzeMerges(graph, targetCommits);
+            var plan = optimizer.OptimizeOrder(selectedCommits, mergeAnalyses, conflicts, FromBranch);
 
             // Mark empty commits in the plan
             foreach (var step in plan)
@@ -180,15 +204,15 @@ public class PlanCommand : ICommand
                     }
                 }
             }
-                
+
 
             // Display conflict warnings
             var highRiskConflicts = conflicts.Where(c => c.Risk >= ConflictRisk.High)
                 .OrderBy(o => o.Risk)
                 .ThenByDescending(o => o.ConflictingCommits.Count)
                 .ToList();
-            
-            if (highRiskConflicts.Any())
+
+            if (highRiskConflicts.Count > 0)
             {
                 AnsiConsole.WriteLine();
                 var conflictTable = new Table()
@@ -234,7 +258,7 @@ public class PlanCommand : ICommand
             {
                 var outputDir = OutputDirectory;
                 Directory.CreateDirectory(outputDir);
-                
+
                 var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
                 var fileName = $"cherrypick_plan_{FromBranch.Replace("/", "_")}_to_{ToBranch.Replace("/", "_")}_{timestamp}.json";
                 var outputPath = Path.Combine(outputDir, fileName);
@@ -287,91 +311,177 @@ public class PlanCommand : ICommand
     {
         // Count empty commits
         var emptyCount = plan.Count(p => p.IsEmpty);
-        
-        // Plan summary
-        var summaryPanel = new Panel(new Markup($"[bold white]Cherry-Pick Execution Plan[/]\n" +
-                                              $"[cyan]Total Steps:[/] [yellow]{plan.Count}[/]\n" +
-                                              $"[cyan]Commits:[/] [yellow]{commitCount}[/]\n" +
-                                              $"[cyan]Potential Conflicts:[/] [{(conflictCount > 0 ? "red" : "green")}]{conflictCount}[/]\n" +
-                                              $"[cyan]Empty Commits:[/] [{(emptyCount > 0 ? "yellow" : "green")}]{emptyCount}[/]"))
-            .Header("[bold blue]📋 Plan Summary[/]")
-            .Border(BoxBorder.Double)
-            .BorderColor(Color.Blue);
 
-        AnsiConsole.Write(summaryPanel);
-        AnsiConsole.WriteLine();
+        // Interactive toggle for showing/hiding empty commits
+        var showEmptyCommits = true;
 
-        // Detailed plan table
-        var table = new Table()
-            .Border(TableBorder.Rounded)
-            .BorderColor(Color.Blue)
-            .AddColumn(new TableColumn("[bold]#[/]").Centered())
-            .AddColumn(new TableColumn("[bold]Step Type[/]").LeftAligned())
-            .AddColumn(new TableColumn("[bold]Description[/]").LeftAligned())
-            .AddColumn(new TableColumn("[bold]Git Command[/]").LeftAligned())
-            .AddColumn(new TableColumn("[bold]Status[/]").Centered());
-
-        var stepNumber = 1;
-        foreach (var step in plan)
+        while (true)
         {
-            var typeColor = step.Type switch
+            // Clear previous display
+            //AnsiConsole.Clear();
+
+            // Filter plan based on toggle setting
+            var displayPlan = showEmptyCommits ? plan : plan.Where(p => !p.IsEmpty).ToList();
+            var hiddenCount = plan.Count - displayPlan.Count;
+
+            // Plan summary with toggle info
+            var summaryText = $"[bold white]Cherry-Pick Execution Plan[/]\n" +
+                             $"[cyan]Total Steps:[/] [yellow]{plan.Count}[/]" +
+                             (hiddenCount > 0 ? $" ([dim]{hiddenCount} hidden[/])" : "") + "\n" +
+                             $"[cyan]Commits:[/] [yellow]{commitCount}[/]\n" +
+                             $"[cyan]Potential Conflicts:[/] [{(conflictCount > 0 ? "red" : "green")}]{conflictCount}[/]\n" +
+                             $"[cyan]Empty Commits:[/] [{(emptyCount > 0 ? "yellow" : "green")}]{emptyCount}[/]" +
+                             (emptyCount > 0 ? $" ([{(showEmptyCommits ? "green" : "yellow")}]{(showEmptyCommits ? "shown" : "hidden")}[/])" : "");
+
+            var summaryPanel = new Panel(new Markup(summaryText))
+                .Header("[bold blue]📋 Plan Summary[/]")
+                .Border(BoxBorder.Double)
+                .BorderColor(Color.Blue);
+
+            AnsiConsole.Write(summaryPanel);
+            AnsiConsole.WriteLine();
+
+            // Toggle controls info
+            var controlsText = $"[dim]Controls: [yellow]T[/] = Toggle empty commits • [yellow]C[/] = Continue • [yellow]Q[/] = Quit view[/]";
+            if (emptyCount > 0)
             {
-                StepType.SingleCommit => "green",
-                StepType.MergeCommit => "blue",
-                StepType.CommitRange => "yellow",
-                _ => "white"
-            };
+                controlsText += $"\n[dim]Empty commits are currently [yellow]{(showEmptyCommits ? "SHOWN" : "HIDDEN")}[/][/]";
+            }
 
-            var typeIcon = step.Type switch
+            var controlsPanel = new Panel(new Markup(controlsText))
+                .Border(BoxBorder.Rounded)
+                .BorderColor(Color.Grey);
+            AnsiConsole.Write(controlsPanel);
+            AnsiConsole.WriteLine();
+
+            // Detailed plan table
+            var table = new Table()
+                .Border(TableBorder.Rounded)
+                .BorderColor(Color.Blue)
+                .AddColumn(new TableColumn("[bold]#[/]").Centered())
+                .AddColumn(new TableColumn("[bold]Step Type[/]").LeftAligned())
+                .AddColumn(new TableColumn("[bold]Description[/]").LeftAligned())
+                .AddColumn(new TableColumn("[bold]Git Command[/]").LeftAligned())
+                .AddColumn(new TableColumn("[bold]Status[/]").Centered());
+
+            var stepNumber = 1;
+            var displayStepNumber = 1;
+
+            foreach (var step in plan)
             {
-                StepType.SingleCommit => "🍒",
-                StepType.MergeCommit => "🔀",
-                StepType.CommitRange => "📦",
-                _ => "📌"
-            };
+                // Skip empty commits if they're hidden
+                if (!showEmptyCommits && step.IsEmpty)
+                {
+                    stepNumber++;
+                    continue;
+                }
 
-            var status = step.IsEmpty 
-                ? "[yellow]⚠ Empty[/]" 
-                : "[green]✓[/]";
+                var typeColor = step.Type switch
+                {
+                    StepType.SingleCommit => "green",
+                    StepType.MergeCommit => "blue",
+                    StepType.CommitRange => "yellow",
+                    _ => "white"
+                };
 
-            var command = step.IsEmpty && !string.IsNullOrEmpty(step.AlternativeCommand)
-                ? $"[dim]{step.AlternativeCommand}[/]"
-                : $"[cyan]{step.GitCommand}[/]";
+                var typeIcon = step.Type switch
+                {
+                    StepType.SingleCommit => "🍒",
+                    StepType.MergeCommit => "🔀",
+                    StepType.CommitRange => "📦",
+                    _ => "📌"
+                };
 
-            var description = step.Description.Split('\n',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries).First();
-            table.AddRow(
-                $"[bold]{stepNumber++}[/]",
-                $"[{typeColor}]{typeIcon} {step.Type}[/]",
-                $"[white]{description}[/]" + (step.IsEmpty ? $"\n[dim yellow]{step.EmptyReason}[/]" : ""),
-                command,
-                status
-            );
+                var status = step.IsEmpty
+                    ? "[yellow]⚠ Empty[/]"
+                    : "[green]✓[/]";
+
+                var command = step.IsEmpty && !string.IsNullOrEmpty(step.AlternativeCommand)
+                    ? $"[dim]{step.AlternativeCommand}[/]"
+                    : $"[cyan]{step.GitCommand}[/]";
+
+                var description = step.Description.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).First();
+
+                // Show original step number and display step number if different
+                var stepDisplay = showEmptyCommits || !step.IsEmpty
+                    ? $"[bold]{stepNumber}[/]"
+                    : $"[bold]{displayStepNumber}[/][dim]({stepNumber})[/]";
+
+                table.AddRow(
+                    stepDisplay,
+                    $"[{typeColor}]{typeIcon} {step.Type}[/]",
+                    $"[white]{description}[/]" + (step.IsEmpty ? $"\n[dim yellow]{step.EmptyReason}[/]" : ""),
+                    command,
+                    status
+                );
+
+                stepNumber++;
+                displayStepNumber++;
+            }
+
+            AnsiConsole.Write(table);
+
+            // Interactive controls
+            AnsiConsole.WriteLine();
+
+            if (emptyCount > 0)
+            {
+                var choice = AnsiConsole.Prompt(
+                    new SelectionPrompt<string>()
+                        .Title("[yellow]Choose an action:[/]")
+                        .AddChoices(new[]
+                        {
+                        showEmptyCommits ? "Hide empty commits" : "Show empty commits",
+                        "Continue with plan",
+                        "Exit view"
+                        }));
+
+                switch (choice)
+                {
+                    case var c when c.Contains("Hide empty") || c.Contains("Show empty"):
+                        showEmptyCommits = !showEmptyCommits;
+                        continue;
+
+                    case "Continue with plan":
+                        break;
+
+                    case "Exit view":
+                        return;
+                }
+            }
+            else
+            {
+                // No empty commits, just show continue option
+                if (!AnsiConsole.Confirm("[yellow]Continue with plan?[/]"))
+                {
+                    return;
+                }
+            }
+
+            break; // Exit the loop to continue with the rest of the method
         }
 
-        AnsiConsole.Write(table);
-
-        // Instructions
+        // Instructions (shown after user chooses to continue)
         AnsiConsole.WriteLine();
         var instructions = "[dim]To execute this plan:\n" +
                          "1. Run the Git commands in order\n" +
                          "2. Empty commits can be skipped with 'git cherry-pick --skip'\n" +
                          "3. If conflicts occur, resolve them before proceeding\n";
-        
+
         if (emptyCount > 0)
         {
             instructions += $"\n[yellow]Note: {emptyCount} commits are expected to be empty and can be safely skipped.[/]\n";
         }
-        
+
         instructions += $"\n[cyan]Or use the provided PowerShell script:[/]\n" +
                        "[white]  .\\execute_cherrypick_with_empty_handling.ps1 -PlanFile <plan.json> -SkipEmpty[/]";
-        
+
         var instructionPanel = new Panel(new Markup(instructions))
             .Header("[dim]Instructions[/]")
             .Border(BoxBorder.Rounded)
             .BorderColor(Color.Grey);
         AnsiConsole.Write(instructionPanel);
     }
-
     private List<CpCommit> GetCommitsForTickets(
         List<string> selectedTickets,
         Dictionary<string, List<CpCommit>> ticketMap,

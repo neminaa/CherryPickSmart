@@ -6,7 +6,6 @@ using CherryPickSmart.Services;
 using CommandLine;
 using Microsoft.Extensions.DependencyInjection;
 using Spectre.Console;
-using static CherryPickSmart.Core.ConflictAnalysis.ConflictPredictor;
 
 namespace CherryPickSmart.Commands;
 
@@ -196,19 +195,19 @@ public class AnalyzeCommand : ICommand
         DisplaySummaryStatistics(result.Statistics);
 
         // Display Ticket Analysis
-        if (result.TicketAnalyses.Any())
+        if (result.TicketAnalyses.Count > 0)
         {
             DisplayTicketAnalysis(result);
         }
 
         // Display Top Recommendations
-        if (result.Recommendations.Any())
+        if (result.Recommendations.Count > 0)
         {
             DisplayRecommendations(result.Recommendations);
         }
 
         // Display Orphan Summary if requested
-        if (ShowOrphans && result.OrphanAnalysis.OrphanCommits.Any())
+        if (ShowOrphans && result.OrphanAnalysis.OrphanCommits.Count > 0)
         {
             DisplayOrphanAnalysis(result.OrphanAnalysis);
         }
@@ -222,7 +221,7 @@ public class AnalyzeCommand : ICommand
     /// <summary>
     /// Display summary statistics
     /// </summary>
-    private void DisplaySummaryStatistics(AnalysisStatistics stats)
+    private static void DisplaySummaryStatistics(AnalysisStatistics stats)
     {
         var statsTable = new Table()
             .Border(TableBorder.Rounded)
@@ -280,7 +279,7 @@ public class AnalyzeCommand : ICommand
     /// <summary>
     /// Display ticket analysis in a formatted table
     /// </summary>
-    private void DisplayTicketAnalysis(AnalysisResult result)
+    private static void DisplayTicketAnalysis(AnalysisResult result)
     {
         var ticketTable = new Table()
             .Border(TableBorder.Rounded)
@@ -344,7 +343,7 @@ public class AnalyzeCommand : ICommand
     /// <summary>
     /// Display recommendations with nice formatting
     /// </summary>
-    private void DisplayRecommendations(List<ActionableRecommendation> recommendations)
+    private static void DisplayRecommendations(List<ActionableRecommendation> recommendations)
     {
         var recTable = new Table()
             .Border(TableBorder.Rounded)
@@ -389,7 +388,7 @@ public class AnalyzeCommand : ICommand
     /// <summary>
     /// Display orphan analysis
     /// </summary>
-    private void DisplayOrphanAnalysis(OrphanAnalysis orphanAnalysis)
+    private static void DisplayOrphanAnalysis(OrphanAnalysis orphanAnalysis)
     {
         var orphanTable = new Table()
             .Border(TableBorder.Rounded)
@@ -410,7 +409,7 @@ public class AnalyzeCommand : ICommand
                 _ => "dim"
             };
 
-            var suggestion = orphan.Suggestions.Any()
+            var suggestion = orphan.Suggestions.Count >0
                 ? orphan.Suggestions.OrderByDescending(s => s.Confidence).First()
                 : null;
 
@@ -473,7 +472,7 @@ public class AnalyzeCommand : ICommand
             new Markup("[bold]Top Risk Factors:[/]")
         );
 
-        if (plan.RiskAssessment.TopRisks.Any())
+        if (plan.RiskAssessment.TopRisks.Count > 0)
         {
             foreach (var risk in plan.RiskAssessment.TopRisks)
             {
@@ -525,13 +524,7 @@ public class AnalyzeCommand : ICommand
         try
         {
             await AnsiConsole.Progress()
-                .Columns(new ProgressColumn[]
-                {
-                    new TaskDescriptionColumn(),
-                    new ProgressBarColumn(),
-                    new PercentageColumn(),
-                    new SpinnerColumn()
-                })
+                .Columns(new TaskDescriptionColumn(), new ProgressBarColumn(), new PercentageColumn(), new SpinnerColumn())
                 .StartAsync(async ctx =>
                 {
                     // Export based on format option
@@ -591,7 +584,7 @@ public class AnalyzeCommand : ICommand
         AnsiConsole.MarkupLine($"  [green]✅ JSON report:[/] [link]{filePath}[/]");
     }
 
-    private async Task ExportHtmlReport(AnalysisResult result, string outputDir)
+    private static async Task ExportHtmlReport(AnalysisResult result, string outputDir)
     {
         var fileName = result.Export.MarkdownReport.FileName.Replace(".md", ".html");
         var filePath = Path.Combine(outputDir, fileName);
@@ -639,7 +632,7 @@ public class AnalyzeCommand : ICommand
     // Helper methods for building analysis components (simplified versions)
     // In practice, these would use the comprehensive builder methods we designed
 
-    private List<TicketAnalysis> BuildTicketAnalyses(
+    private static List<TicketAnalysis> BuildTicketAnalyses(
         Dictionary<string, List<CpCommit>> ticketMap)
     {
         return ticketMap.Select(kvp => new TicketAnalysis
@@ -667,7 +660,7 @@ public class AnalyzeCommand : ICommand
             Statistics = new OrphanStatistics
             {
                 TotalOrphans = orphanCommits.Count,
-                OrphansWithSuggestions = orphanCommits.Count(o => o.Suggestions.Any()),
+                OrphansWithSuggestions = orphanCommits.Count(o => o.Suggestions.Count > 0),
                 HighPriorityOrphans = orphanCommits.Count(o => o.Severity >= OrphanCommitDetector.OrphanSeverity.High)
             }
         };
@@ -787,7 +780,7 @@ public class AnalyzeCommand : ICommand
     /// </summary>
     private static TicketPriority DetermineTicketPriority(string key, List<CpCommit> commits)
     {
-        if (!commits.Any())
+        if (commits.Count == 0)
             return TicketPriority.Low;
 
         // Calculate various metrics
@@ -893,10 +886,10 @@ public class AnalyzeCommand : ICommand
         return reportGenerator.GenerateHtmlReport(result);
     }
 
-    private string GenerateBashScript(AnalysisResult result) => "#!/bin/bash\necho 'Cherry-pick script'";
-    private string GeneratePowerShellScript(AnalysisResult result) => "Write-Host 'Cherry-pick script'";
-    private string GenerateCsvSummary(AnalysisResult result) => "Ticket,Commits,Status\n";
-    private string GenerateMarkdownReport(AnalysisResult result) => "# Cherry-Pick Analysis Report\n";
+    private static string GenerateBashScript(AnalysisResult result) => "#!/bin/bash\necho 'Cherry-pick script'";
+    private static string GeneratePowerShellScript(AnalysisResult result) => "Write-Host 'Cherry-pick script'";
+    private static string GenerateCsvSummary(AnalysisResult result) => "Ticket,Commits,Status\n";
+    private static string GenerateMarkdownReport(AnalysisResult result) => "# Cherry-Pick Analysis Report\n";
 }
 
 public class ExportableReport

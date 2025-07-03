@@ -1,5 +1,4 @@
 using CherryPickSmart.Models;
-using LibGit2Sharp;
 
 namespace CherryPickSmart.Core.TicketAnalysis;
 

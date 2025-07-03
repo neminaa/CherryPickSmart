@@ -101,7 +101,7 @@ public class InteractivePromptService
                 continue;
             }
 
-            if (orphan.Suggestions.Any())
+            if (orphan.Suggestions.Count > 0)
             {
                 var table = new Table();
                 table.AddColumn("Ticket");
@@ -123,7 +123,7 @@ public class InteractivePromptService
             }
 
             var choices = new List<string> { "Skip this commit" };
-            if (orphan.Suggestions.Any())
+            if (orphan.Suggestions.Count > 0)
                 choices.AddRange(orphan.Suggestions.Select(s => s.TicketKey));
             choices.Add("Enter ticket manually");
 

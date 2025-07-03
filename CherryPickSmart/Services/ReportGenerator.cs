@@ -177,7 +177,7 @@ namespace CherryPickSmart.Services
         /// <summary>
         /// Truncate commit message for display
         /// </summary>
-        private string TruncateMessage(string message)
+        private static string TruncateMessage(string message)
         {
             if (string.IsNullOrEmpty(message))
                 return "";
@@ -186,7 +186,7 @@ namespace CherryPickSmart.Services
             var firstLine = message.Split('\n')[0];
 
             // Truncate if too long
-            return firstLine.Length > 80 ? firstLine.Substring(0, 77) + "..." : firstLine;
+            return firstLine.Length > 80 ? firstLine[..77] + "..." : firstLine;
         }
 
         /// <summary>

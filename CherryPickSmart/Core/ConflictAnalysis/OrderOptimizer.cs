@@ -1,7 +1,5 @@
-using CherryPickSmart.Commands;
 using CherryPickSmart.Core.GitAnalysis;
 using CherryPickSmart.Models;
-using static CherryPickSmart.Core.ConflictAnalysis.ConflictPredictor;
 
 namespace CherryPickSmart.Core.ConflictAnalysis;
 
@@ -20,7 +18,7 @@ public class OrderOptimizer
                 .Where(sha => selectedCommits.Any(c => c.Sha == sha))
                 .ToList();
 
-            if (mergeCommitShas.Any())
+            if (mergeCommitShas.Count > 0)
             {
                 var desc = merge.Message
                     .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -108,7 +106,7 @@ public class OrderOptimizer
         return ticketGroups.OrderBy(g => g.Key).ToList();
     }
 
-    private List<List<CpCommit>> FindConsecutiveRanges(List<CpCommit> commits)
+    private static List<List<CpCommit>> FindConsecutiveRanges(List<CpCommit> commits)
     {
         // Placeholder for finding consecutive ranges of commits
         return commits.Select(c => new List<CpCommit> { c }).ToList();

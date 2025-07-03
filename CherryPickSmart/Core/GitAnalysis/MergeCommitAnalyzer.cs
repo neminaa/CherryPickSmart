@@ -8,9 +8,14 @@ public class MergeCommitAnalyzer
     public record MergeAnalysis
     {
         public string MergeSha { get; init; } = "";
+        public string ShortMergeSha => MergeSha[..8];
         public HashSet<string> IntroducedCommits { get; init; } = [];
         public string FirstParent { get; init; } = "";
         public string SecondParent { get; init; } = "";
+
+        // Branch information
+        public string? TargetBranch { get; init; }  // Branch that was checked out (first parent)
+        public string? SourceBranch { get; init; }  // Branch that was merged in (second parent)
 
         // Cherry-pick strategy analysis
         public bool CanCherryPickMerge { get; init; }
@@ -44,7 +49,6 @@ public class MergeCommitAnalyzer
         {
             if (merge.ParentShas.Count < 2)
                 continue; // Skip if somehow not a real merge
-
             var firstParent = merge.ParentShas[0];   // Usually the target branch (main/develop)
             var secondParent = merge.ParentShas[1];  // Usually the feature branch being merged
 
@@ -58,12 +62,18 @@ public class MergeCommitAnalyzer
                 targetBranchCommits,
                 graph);
 
+            // Determine source and target branches
+            var (targetBranch, sourceBranch) = 
+                DetermineMergeBranches(graph, merge);
+
             mergeAnalyses.Add(new MergeAnalysis
             {
                 Message = merge.Message,
                 MergeSha = merge.Sha,
                 FirstParent = firstParent,
                 SecondParent = secondParent,
+                TargetBranch = targetBranch,
+                SourceBranch = sourceBranch,
                 IntroducedCommits = introducedCommits,
                 CanCherryPickMerge = strategy.CanCherryPickMerge,
                 ShouldCherryPickIndividually = strategy.ShouldCherryPickIndividually,
@@ -218,7 +228,82 @@ public class MergeCommitAnalyzer
         return ancestors;
     }
 
-   
+    /// <summary>
+    /// Determine the source and target branches for a merge commit
+    /// </summary>
+    private (string? targetBranch, string? sourceBranch) 
+        DetermineMergeBranches(CpCommitGraph graph, CpCommit mergeCommit)
+    {
+
+        // Try to extract branch names from merge commit message
+        var (msgTargetBranch, msgSourceBranch) = ExtractBranchNamesFromMessage(mergeCommit.Message);
+
+        var targetBranch = msgTargetBranch?.Trim('\'');
+        var sourceBranch = msgSourceBranch?.Trim('\'');
+        
+        return (targetBranch, sourceBranch);
+    }
+
+    /// <summary>
+    /// Extract branch names from merge commit message
+    /// </summary>
+    private static (string? targetBranch, string? sourceBranch) ExtractBranchNamesFromMessage(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+            return (null, null);
+
+        string? targetBranch = null;
+        string? sourceBranch = null;
+
+        // Pattern 1: "Merge branch 'feature-x' into develop"
+        var pattern1 = @"Merge branch '([^']+)' into ([^\s]+)";
+        var match1 = System.Text.RegularExpressions.Regex.Match(message, pattern1);
+        if (match1.Success)
+        {
+            sourceBranch = match1.Groups[1].Value;
+            targetBranch = match1.Groups[2].Value;
+            return (targetBranch, sourceBranch);
+        }
+
+        // Pattern 2: "Merge branch 'feature-x'"
+        var pattern2 = @"Merge branch '([^']+)'";
+        var match2 = System.Text.RegularExpressions.Regex.Match(message, pattern2);
+        if (match2.Success)
+        {
+            sourceBranch = match2.Groups[1].Value;
+            return (targetBranch, sourceBranch);
+        }
+
+        // Pattern 3: "Merge pull request #123 from user/feature-branch"
+        var pattern3 = @"Merge pull request #\d+ from ([^\s]+)";
+        var match3 = System.Text.RegularExpressions.Regex.Match(message, pattern3);
+        if (match3.Success)
+        {
+            var branchPath = match3.Groups[1].Value;
+            // Extract the branch name part after the last '/'
+            var parts = branchPath.Split('/');
+            if (parts.Length > 1)
+            {
+                sourceBranch = string.Join("/", parts.Skip(1));
+            }
+            else
+            {
+                sourceBranch = branchPath;
+            }
+            return (targetBranch, sourceBranch);
+        }
+
+        // Pattern 4: "Merge remote-tracking branch 'origin/feature-x'"
+        var pattern4 = @"Merge remote-tracking branch '([^/]+)/([^']+)'";
+        var match4 = System.Text.RegularExpressions.Regex.Match(message, pattern4);
+        if (match4.Success)
+        {
+            sourceBranch = match4.Groups[2].Value;
+        }
+
+        return (targetBranch, sourceBranch);
+    }
+
     /// <summary>
     /// Get actionable cherry-pick recommendations based on merge analysis
     /// </summary>

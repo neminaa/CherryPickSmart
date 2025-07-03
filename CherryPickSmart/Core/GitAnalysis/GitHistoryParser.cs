@@ -20,21 +20,42 @@ public class GitHistoryParser
         {
             IncludeReachableFrom = fromBranchRef,
             ExcludeReachableFrom = toBranchRef,
-            SortBy = CommitSortStrategies.Reverse
+            SortBy = CommitSortStrategies.Reverse,
         };
 
         var commits = new Dictionary<string, CpCommit>();
         var childrenMap = new Dictionary<string, List<string>>();
+
+        // Build branch-to-commit mapping first
+        var branchCommitMap = BuildBranchCommitMap(repo);
 
         foreach (var commit in repo.Commits.QueryBy(filter))
         {
             var sha = commit.Sha;
             var parents = commit.Parents.Select(p => p.Sha).ToList();
             
+            
             // Get modified files by comparing with parent(s)
             var modifiedFiles = GetModifiedFiles(repo, commit);
 
-            commits[sha] = new CpCommit(commit, modifiedFiles);
+            // Skip commits that only contain packages.lock.json files
+            if (modifiedFiles.Count == 0)
+            {
+                continue;
+            }
+
+            var cpCommit = new CpCommit(commit, modifiedFiles);
+            
+            // Track which branches contain this commit
+            foreach (var (branchName, commitShas) in branchCommitMap)
+            {
+                if (commitShas.Contains(sha))
+                {
+                    cpCommit.ContainingBranches.Add(branchName);
+                }
+            }
+
+            commits[sha] = cpCommit;
 
             // Build children map for navigation
             foreach (var parent in parents)
@@ -50,8 +71,36 @@ public class GitHistoryParser
             Commits = commits,
             ChildrenMap = childrenMap,
             FromBranch = fromBranch,
-            ToBranch = toBranch
+            ToBranch = toBranch,
+            BranchCommitMap = branchCommitMap
         };
+    }
+
+    /// <summary>
+    /// Build a mapping of branch names to the commits they contain
+    /// </summary>
+    private Dictionary<string, HashSet<string>> BuildBranchCommitMap(Repository repo)
+    {
+        var branchCommitMap = new Dictionary<string, HashSet<string>>();
+
+        foreach (var branch in repo.Branches.Where(b => !b.IsRemote))
+        {
+            var commitShas = new HashSet<string>();
+            var filter = new CommitFilter
+            {
+                IncludeReachableFrom = branch.Tip,
+                SortBy = CommitSortStrategies.None
+            };
+
+            foreach (var commit in repo.Commits.QueryBy(filter))
+            {
+                commitShas.Add(commit.Sha);
+            }
+
+            branchCommitMap[branch.FriendlyName] = commitShas;
+        }
+
+        return branchCommitMap;
     }
 
     /// <summary>
@@ -78,6 +127,14 @@ public class GitHistoryParser
 
             foreach (var change in changes)
             {
+                // Skip packages.lock.json files as they are generated during build
+                if (IsPackagesLockFile(change.Path) || 
+                    (change.Status == ChangeKind.Renamed && !string.IsNullOrEmpty(change.OldPath) && IsPackagesLockFile(change.OldPath)) ||
+                    (change.Status == ChangeKind.Deleted && !string.IsNullOrEmpty(change.OldPath) && IsPackagesLockFile(change.OldPath)))
+                {
+                    continue;
+                }
+
                 // Include the current path
                 modifiedFiles.Add(change.Path);
 
@@ -104,6 +161,14 @@ public class GitHistoryParser
     }
 
     /// <summary>
+    /// Check if a file path is a packages.lock.json file
+    /// </summary>
+    private bool IsPackagesLockFile(string filePath)
+    {
+        return filePath != null && filePath.EndsWith("packages.lock.json", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Get all files in a tree (used for root commits)
     /// </summary>
     private List<string> GetAllFilesInTree(Tree tree, string prefix = "")
@@ -123,8 +188,11 @@ public class GitHistoryParser
             }
             else if (entry.TargetType == TreeEntryTargetType.Blob)
             {
-                // This is a file
-                files.Add(fullPath);
+                // This is a file - skip packages.lock.json files
+                if (!IsPackagesLockFile(fullPath))
+                {
+                    files.Add(fullPath);
+                }
             }
         }
 
@@ -176,13 +244,17 @@ public class GitHistoryParser
                 var allFiles = GetAllFilesInTree(commit.Tree);
                 foreach (var file in allFiles)
                 {
-                    changes[file] = new FileChangeInfo
+                    // Skip packages.lock.json files
+                    if (!IsPackagesLockFile(file))
                     {
-                        Path = file,
-                        ChangeType = ChangeKind.Added,
-                        LinesAdded = GetFileLineCount(repo, commit, file),
-                        LinesDeleted = 0
-                    };
+                        changes[file] = new FileChangeInfo
+                        {
+                            Path = file,
+                            ChangeType = ChangeKind.Added,
+                            LinesAdded = GetFileLineCount(repo, commit, file),
+                            LinesDeleted = 0
+                        };
+                    }
                 }
                 return changes;
             }
@@ -192,14 +264,19 @@ public class GitHistoryParser
 
             foreach (var patchEntry in patch)
             {
-                changes[patchEntry.Path] = new FileChangeInfo
+                // Skip packages.lock.json files
+                if (!IsPackagesLockFile(patchEntry.Path) && 
+                    (string.IsNullOrEmpty(patchEntry.OldPath) || !IsPackagesLockFile(patchEntry.OldPath)))
                 {
-                    Path = patchEntry.Path,
-                    OldPath = patchEntry.OldPath,
-                    ChangeType = patchEntry.Status,
-                    LinesAdded = patchEntry.LinesAdded,
-                    LinesDeleted = patchEntry.LinesDeleted
-                };
+                    changes[patchEntry.Path] = new FileChangeInfo
+                    {
+                        Path = patchEntry.Path,
+                        OldPath = patchEntry.OldPath,
+                        ChangeType = patchEntry.Status,
+                        LinesAdded = patchEntry.LinesAdded,
+                        LinesDeleted = patchEntry.LinesDeleted
+                    };
+                }
             }
         }
         catch (LibGit2SharpException)

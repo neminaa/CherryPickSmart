@@ -154,16 +154,40 @@ public class PlanCommand : ICommand
                     var conflictPredictor = services.GetRequiredService<ConflictPredictor>();
                     conflicts = conflictPredictor.PredictConflicts(RepositoryPath, selectedCommits, ToBranch);
 
+            // Detect empty commits
+            AnsiConsole.WriteLine("🔍 Detecting empty commits...");
+                    var emptyDetector = new EmptyCommitDetector(RepositoryPath);
+                    var emptyCommits = emptyDetector.DetectEmptyCommits(selectedCommits, ToBranch);
+
             // Optimize order
             AnsiConsole.WriteLine("🔧 Optimizing cherry-pick order...");
                     var optimizer = services.GetRequiredService<OrderOptimizer>();
                     var mergeAnalyzer = services.GetRequiredService<MergeCommitAnalyzer>();
                     var mergeAnalyses = mergeAnalyzer.AnalyzeMerges(graph, targetCommits);
-                    plan = optimizer.OptimizeOrder(selectedCommits, mergeAnalyses, conflicts);
+                    plan = optimizer.OptimizeOrder(selectedCommits, mergeAnalyses, conflicts,FromBranch);
+
+            // Mark empty commits in the plan
+            foreach (var step in plan)
+            {
+                if (step.CommitShas.Count == 1)
+                {
+                    var commitSha = step.CommitShas[0];
+                    if (emptyCommits.TryGetValue(commitSha, out var emptyInfo))
+                    {
+                        step.IsEmpty = true;
+                        step.EmptyReason = emptyInfo.Details;
+                        step.AlternativeCommand = $"{step.GitCommand} --allow-empty # {emptyInfo.Reason}";
+                    }
+                }
+            }
                 
 
             // Display conflict warnings
-            var highRiskConflicts = conflicts.Where(c => c.Risk >= ConflictRisk.High).ToList();
+            var highRiskConflicts = conflicts.Where(c => c.Risk >= ConflictRisk.High)
+                .OrderBy(o => o.Risk)
+                .ThenByDescending(o => o.ConflictingCommits.Count)
+                .ToList();
+            
             if (highRiskConflicts.Any())
             {
                 AnsiConsole.WriteLine();
@@ -261,11 +285,15 @@ public class PlanCommand : ICommand
 
     private void DisplayCherryPickPlan(List<CherryPickStep> plan, int commitCount, int conflictCount)
     {
+        // Count empty commits
+        var emptyCount = plan.Count(p => p.IsEmpty);
+        
         // Plan summary
         var summaryPanel = new Panel(new Markup($"[bold white]Cherry-Pick Execution Plan[/]\n" +
                                               $"[cyan]Total Steps:[/] [yellow]{plan.Count}[/]\n" +
                                               $"[cyan]Commits:[/] [yellow]{commitCount}[/]\n" +
-                                              $"[cyan]Potential Conflicts:[/] [{(conflictCount > 0 ? "red" : "green")}]{conflictCount}[/]"))
+                                              $"[cyan]Potential Conflicts:[/] [{(conflictCount > 0 ? "red" : "green")}]{conflictCount}[/]\n" +
+                                              $"[cyan]Empty Commits:[/] [{(emptyCount > 0 ? "yellow" : "green")}]{emptyCount}[/]"))
             .Header("[bold blue]📋 Plan Summary[/]")
             .Border(BoxBorder.Double)
             .BorderColor(Color.Blue);
@@ -280,7 +308,8 @@ public class PlanCommand : ICommand
             .AddColumn(new TableColumn("[bold]#[/]").Centered())
             .AddColumn(new TableColumn("[bold]Step Type[/]").LeftAligned())
             .AddColumn(new TableColumn("[bold]Description[/]").LeftAligned())
-            .AddColumn(new TableColumn("[bold]Git Command[/]").LeftAligned());
+            .AddColumn(new TableColumn("[bold]Git Command[/]").LeftAligned())
+            .AddColumn(new TableColumn("[bold]Status[/]").Centered());
 
         var stepNumber = 1;
         foreach (var step in plan)
@@ -301,11 +330,21 @@ public class PlanCommand : ICommand
                 _ => "📌"
             };
 
+            var status = step.IsEmpty 
+                ? "[yellow]⚠ Empty[/]" 
+                : "[green]✓[/]";
+
+            var command = step.IsEmpty && !string.IsNullOrEmpty(step.AlternativeCommand)
+                ? $"[dim]{step.AlternativeCommand}[/]"
+                : $"[cyan]{step.GitCommand}[/]";
+
+            var description = step.Description.Split('\n',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries).First();
             table.AddRow(
                 $"[bold]{stepNumber++}[/]",
                 $"[{typeColor}]{typeIcon} {step.Type}[/]",
-                $"[white]{step.Description}[/]",
-                $"[cyan1]{step.GitCommand}[/]"
+                $"[white]{description}[/]" + (step.IsEmpty ? $"\n[dim yellow]{step.EmptyReason}[/]" : ""),
+                command,
+                status
             );
         }
 
@@ -313,8 +352,20 @@ public class PlanCommand : ICommand
 
         // Instructions
         AnsiConsole.WriteLine();
-        var instructionPanel = new Panel(new Markup("[dim]To execute this plan, run the Git commands in order.\n" +
-                                                   "If conflicts occur, resolve them before proceeding to the next step.[/]"))
+        var instructions = "[dim]To execute this plan:\n" +
+                         "1. Run the Git commands in order\n" +
+                         "2. Empty commits can be skipped with 'git cherry-pick --skip'\n" +
+                         "3. If conflicts occur, resolve them before proceeding\n";
+        
+        if (emptyCount > 0)
+        {
+            instructions += $"\n[yellow]Note: {emptyCount} commits are expected to be empty and can be safely skipped.[/]\n";
+        }
+        
+        instructions += $"\n[cyan]Or use the provided PowerShell script:[/]\n" +
+                       "[white]  .\\execute_cherrypick_with_empty_handling.ps1 -PlanFile <plan.json> -SkipEmpty[/]";
+        
+        var instructionPanel = new Panel(new Markup(instructions))
             .Header("[dim]Instructions[/]")
             .Border(BoxBorder.Rounded)
             .BorderColor(Color.Grey);

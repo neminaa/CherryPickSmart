@@ -1,4 +1,5 @@
 using CherryPickSmart.Commands;
+using CherryPickSmart.Core.GitAnalysis;
 using CherryPickSmart.Models;
 using static CherryPickSmart.Core.ConflictAnalysis.ConflictPredictor;
 
@@ -6,10 +7,9 @@ namespace CherryPickSmart.Core.ConflictAnalysis;
 
 public class OrderOptimizer
 {
-    public List<CherryPickStep> OptimizeOrder(
-        List<CpCommit> selectedCommits,
-        List<GitAnalysis.MergeCommitAnalyzer.MergeAnalysis> completeMerges,
-        List<ConflictPrediction> conflicts)
+    public List<CherryPickStep> OptimizeOrder(List<CpCommit> selectedCommits,
+        List<MergeCommitAnalyzer.MergeAnalysis> completeMerges,
+        List<ConflictPrediction> conflicts, string srcBranch)
     {
         var steps = new List<CherryPickStep>();
         var processedCommits = new HashSet<string>();
@@ -22,13 +22,36 @@ public class OrderOptimizer
 
             if (mergeCommitShas.Any())
             {
-                steps.Add(new CherryPickStep
+                var desc = merge.Message
+                    .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .First();
+                
+                desc = desc.Replace("[", string.Empty);
+                desc = desc.Replace("]", string.Empty);
+                //desc = desc.Replace("/", string.Empty);
+
+                var step = new CherryPickStep
                 {
                     Type = StepType.MergeCommit,
                     CommitShas = [merge.MergeSha],
-                    Description = $"Preserve merge {merge.MergeSha[..8]} with {mergeCommitShas.Count} commits",
-                    GitCommand = $"git cherry-pick -m 1 {merge.MergeSha}"
-                });
+                    //Description = $"Preserve merge: {desc}",
+                    Description = $"Preserve merge {desc}",
+                    GitCommand = $"git cherry-pick -m 1 {merge.ShortMergeSha}",
+                };
+                
+                var isEmpty = !string.IsNullOrEmpty(merge.TargetBranch) &&
+                              !string.Equals(merge.TargetBranch, srcBranch,
+                                  StringComparison.InvariantCultureIgnoreCase);
+
+                if (isEmpty)
+                {
+                    step.IsEmpty = true;
+                    step.EmptyReason = $"Target branch is not {srcBranch}";
+                    step.AlternativeCommand =
+                        $"git cherry-pick -m 1 --strategy recursive -X ours {merge.ShortMergeSha} --allow-empty # {step.EmptyReason}";
+                }
+
+                steps.Add(step);
 
                 processedCommits.UnionWith(mergeCommitShas);
             }
@@ -50,12 +73,15 @@ public class OrderOptimizer
             {
                 if (range.Count == 1)
                 {
+                    var desc = range[0].Message
+                        .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .First();
                     steps.Add(new CherryPickStep
                     {
                         Type = StepType.SingleCommit,
                         CommitShas = [range[0].Sha],
-                        Description = $"{group.Key}: {range[0].Message.Truncate(50)}",
-                        GitCommand = $"git cherry-pick {range[0].Sha}"
+                        Description = $"{group.Key}: {desc}",
+                        GitCommand = $"git cherry-pick {range[0].ShortSha}"
                     });
                 }
                 else
@@ -65,7 +91,7 @@ public class OrderOptimizer
                         Type = StepType.CommitRange,
                         CommitShas = range.Select(c => c.Sha).ToList(),
                         Description = $"{group.Key}: {range.Count} commits",
-                        GitCommand = $"git cherry-pick {range.First().Sha}^..{range.Last().Sha}"
+                        GitCommand = $"git cherry-pick {range.First().ShortSha}^..{range.Last().ShortSha}"
                     });
                 }
             }
@@ -95,6 +121,11 @@ public record CherryPickStep
     public List<string> CommitShas { get; init; } = [];
     public string Description { get; init; } = "";
     public string GitCommand { get; init; } = "";
+    
+    // New properties for empty commit handling
+    public bool IsEmpty { get; set; }
+    public string? EmptyReason { get; set; }
+    public string? AlternativeCommand { get; set; }
 }
 
 public enum StepType { SingleCommit, MergeCommit, CommitRange }

@@ -13,6 +13,9 @@ public record CpCommit
     public List<string> ModifiedFiles { get; init; } = [];
     public bool IsMergeCommit => ParentShas.Count > 1;
 
+    // Branch tracking
+    public HashSet<string> ContainingBranches { get; set; } = [];
+
     // Derived properties
     public List<string> ExtractedTickets { get; set; } = [];
     public string? InferredTicket { get; set; }
@@ -40,4 +43,7 @@ public record CpCommitGraph
     public Dictionary<string, List<string>> ChildrenMap { get; init; } = new();
     public string FromBranch { get; init; } = "";
     public string ToBranch { get; init; } = "";
+    
+    // Branch tracking: Map of branch name to commit SHAs that are on that branch
+    public Dictionary<string, HashSet<string>> BranchCommitMap { get; init; } = new();
 }

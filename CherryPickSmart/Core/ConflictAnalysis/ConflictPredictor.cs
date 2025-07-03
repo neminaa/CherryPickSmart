@@ -70,7 +70,7 @@ public class ConflictPredictor
             .Spinner(Spinner.Known.Dots2)
             .SpinnerStyle(Style.Parse("yellow"))
             .Start("🔍 Analyzing semantic conflicts...", _ =>
-                PredictSemanticConflicts(repo, commitsToCherry, targetBranchRef));
+                PredictSemanticConflicts(commitsToCherry));
 
         predictions.AddRange(semanticConflicts);
 
@@ -93,63 +93,45 @@ public class ConflictPredictor
     {
         var predictions = new List<ConflictPrediction>();
         var totalFiles = fileCommitMap.Count;
+        var processed = 0;
+        var display = new LiveDisplayRenderer();  // holds tree + progress node
 
-        // Create a progress display
-        AnsiConsole.Progress()
-            .Columns(
-                new TaskDescriptionColumn(),
-                new ProgressBarColumn(),
-                new PercentageColumn(),
-                new RemainingTimeColumn(),
-                new SpinnerColumn(Spinner.Known.Dots2))
+        // Single Live block for both tree & progress
+        AnsiConsole.Live(display.DirectoryTree)
+            .AutoClear(false)
+            .Overflow(VerticalOverflow.Ellipsis)
+            .Cropping(VerticalOverflowCropping.Top)
             .Start(ctx =>
             {
-                // Create progress task
-                var mainTask = ctx.AddTask("[green]Analyzing file conflicts[/]", maxValue: totalFiles);
-
-                // Create live display for current analysis
-                var analysisDisplay = new LiveDisplayRenderer();
-
-                ctx.Refresh();
-
-                var processedFiles = 0;
                 foreach (var (file, commits) in fileCommitMap)
                 {
-                    // Update main progress
-                    mainTask.Description = $"[green]Analyzing[/] [blue]{Path.GetFileName(file)}[/]";
+                    processed++;
 
-                    // Show current file analysis in a collapsible way
-                    analysisDisplay.UpdateCurrentFile(file, commits.Count, processedFiles + 1, totalFiles);
+                    // 1) Update the “X / total” indicator
+                    display.UpdateProgress(processed, totalFiles);
 
+                    // 2) Ensure directory node exists
+                    display.UpdateCurrentFile(file);
+
+                    // 3) Analyze and record
                     try
                     {
-                        var prediction = AnalyzeFileConflicts(repo, file, commits, targetBranch);
-
-                        if (prediction is { Risk: > ConflictRisk.Low })
-                        {
-                            predictions.Add(prediction);
-                            analysisDisplay.AddResult(file, prediction.Risk, prediction.Type,prediction.ConflictingCommits.Count, true);
-                        }
-                        else
-                        {
-                            analysisDisplay.AddResult(file, ConflictRisk.Low, ConflictType.ContentOverlap, prediction?.ConflictingCommits.Count ?? 0, false);
-                        }
+                        var pred = AnalyzeFileConflicts(repo, file, commits, targetBranch);
+                        var added = pred.Risk > ConflictRisk.Low;
+                        display.AddResult(file, pred.Risk, pred.Type, pred.ConflictingCommits.Count, added);
+                        if (added) predictions.Add(pred);
                     }
                     catch (Exception ex)
                     {
-                        analysisDisplay.AddError(file, ex.Message);
+                        display.AddError(file, ex.Message);
                     }
 
-                    processedFiles++;
-                    mainTask.Value = processedFiles;
+                    // 4) Redraw tree + progress
+                    ctx.UpdateTarget(display.DirectoryTree);
                     ctx.Refresh();
 
-                    // Small delay to show progress (remove in production)
-                    Thread.Sleep(50);
+                    Thread.Sleep(50); // remove in production
                 }
-
-                mainTask.Description = "[green]✓ File analysis complete[/]";
-                mainTask.Value = totalFiles;
             });
 
         return predictions;
@@ -160,142 +142,98 @@ public class ConflictPredictor
     /// </summary>
     private class LiveDisplayRenderer
     {
-        private readonly List<(string file, ConflictRisk risk, ConflictType type, bool added)> _results = [];
-        private readonly List<(string file, string error)> _errors = [];
         private string _currentFile = "";
         private string _currentDirectory = "";
-        private int _currentCommits = 0;
         private int _currentIndex = 0;
         private int _totalFiles = 0;
 
         // Tree structure for displaying files
-        private Tree _directoryTree = new Tree("[yellow]Files[/]");
-        private Dictionary<string, TreeNode> _directoryNodes = new();
 
 
-        public void UpdateCurrentFile(string file, int commits, int index, int total)
+        private readonly TreeNode _progressNode;
+        public Tree DirectoryTree { get; }
+        private readonly Dictionary<string, TreeNode> _directoryNodes = new();
+        private string _lastDirectory = "";
+        public LiveDisplayRenderer()
         {
-            _currentFile = file;
-            _currentCommits = commits;
-            _currentIndex = index;
-            _totalFiles = total;
-
-            var directory = Path.GetDirectoryName(file) ?? "/";
-
-            if (_currentDirectory != directory)
-            {
-                _currentDirectory = directory;
-
-                // Create directory node if it doesn't exist
-                EnsureDirectoryNode(directory);
-
-                // If this is a new top-level directory, render the tree
-                if (index % 5 == 1 || !_directoryNodes.ContainsKey(GetRootDirectory(directory)))
-                {
-                    AnsiConsole.Write(_directoryTree);
-                    // Reset tree after rendering to avoid duplicates
-                    _directoryTree = new Tree("[yellow]Files[/]");
-                    _directoryNodes.Clear();
-                    EnsureDirectoryNode(directory);
-                }
-            }
-
+            DirectoryTree = new Tree("[yellow]Files[/]");
+            _progressNode = DirectoryTree.AddNode("");
         }
-        private string GetRootDirectory(string path)
+        public void UpdateProgress(int processed, int total)
         {
-            var parts = path.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
-            return parts.Length > 0 ? parts[0] : "/";
+            _progressNode.Nodes.Clear();
+            _progressNode.AddNode($"[green]{processed}[/] of [blue]{total}[/] files");
+        }
+        public void UpdateCurrentFile(string file)
+        {
+            var dir = Path.GetDirectoryName(file) ?? "/";
+            if (dir == _lastDirectory) return;
+            _lastDirectory = dir;
+            EnsureDirectoryNode(dir);
         }
 
         private TreeNode EnsureDirectoryNode(string directory)
         {
-            // Already have this exact directory
-            if (_directoryNodes.TryGetValue(directory, out var existingNode))
-                return existingNode;
+            var parts = directory
+                .Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
 
-            var parts = directory.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
-            TreeNode? currentNode = null;
-            var currentPath = "";
+            TreeNode? parent = null;
 
-            if (string.IsNullOrEmpty(directory))
+            if (parts.Length == 0)
             {
-                parts = ["/"]; // Handle root directory case
+                parts = [""];
             }
-            // Build directory hierarchy
+            var currentPath = "";
             foreach (var part in parts)
             {
-                currentPath = string.IsNullOrEmpty(currentPath) ? part : Path.Combine(currentPath, part);
+                currentPath = string.IsNullOrEmpty(currentPath)
+                    ? part
+                    : Path.Combine(currentPath, part);
 
                 if (!_directoryNodes.TryGetValue(currentPath, out var node))
                 {
-                    node = _directoryTree.AddNode($"[blue]{part}/[/]");
+                    node = parent == null
+                        ? DirectoryTree.AddNode($"[blue]{part}/[/]")
+                        : parent.AddNode($"[blue]{part}/[/]");
+
                     _directoryNodes[currentPath] = node;
                 }
 
-                currentNode = node;
+                parent = node;
             }
-
-            return currentNode!;
+            return parent!;
         }
-        public void AddResult(string file, ConflictRisk risk, ConflictType type, int conflictingCommitsCount,
-            bool added)
+
+        public void AddResult(string file, ConflictRisk risk, ConflictType type, int count, bool added)
         {
-            _results.Add((file, risk, type, added));
+            if (!added || risk < ConflictRisk.Medium) return;
 
-            // Only show significant results to avoid spam
-            if (added && risk >= ConflictRisk.Medium)
-            {
-                var riskColor = GetRiskColor(risk);
-                var typeEmoji = GetTypeEmoji(type);
-                var fileName = Path.GetFileName(file);
-                var directory = Path.GetDirectoryName(file) ?? "/";
-
-                // Add file to the appropriate directory node
-                var directoryNode = EnsureDirectoryNode(directory);
-                directoryNode.AddNode($"{typeEmoji} [{riskColor}]{fileName}[/] - {risk} risk | {conflictingCommitsCount} commits");
-            }
+            var node = EnsureDirectoryNode(Path.GetDirectoryName(file) ?? "/");
+            var emoji = GetTypeEmoji(type);
+            var color = GetRiskColor(risk);
+            var name = Path.GetFileName(file);
+            node.AddNode($"{emoji} [{color}]{name}[/] - {risk} | {count} commits");
         }
-        private static string GetTreeDisplayPath(string fullPath)
-        {
-            // Split the path into segments
-            var parts = fullPath.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
 
-            if (parts.Length <= 2)
-                return fullPath; // Just return the full path if it's short
-
-            // For longer paths, create a tree-like representation
-            var fileName = parts[^1];
-            var parentDir = parts[^2];
-
-            // If path is very long, abbreviate middle directories
-            if (parts.Length > 3)
-            {
-                var rootDir = parts[0];
-                return $"{rootDir}/.../{parentDir}/{fileName}";
-            }
-
-            return $"{parentDir}/{fileName}";
-        }
         public void AddError(string file, string error)
         {
-            _errors.Add((file, error));
-            AnsiConsole.MarkupLine($"    [red]⚠ {file}[/] - Error: {error.Truncate(50)}");
+            // Errors go straight to console below the tree
+            AnsiConsole.MarkupLine($"[red]⚠ {file}:[/] {error}");
         }
 
-        private string GetRiskColor(ConflictRisk risk) => risk switch
+        private string GetRiskColor(ConflictRisk r) => r switch
         {
             ConflictRisk.Certain => "red bold",
             ConflictRisk.High => "red",
             ConflictRisk.Medium => "yellow",
-            ConflictRisk.Low => "green",
-            _ => "grey"
+            _ => "green"
         };
 
-        private string GetTypeEmoji(ConflictType type) => type switch
+        private static string GetTypeEmoji(ConflictType t) => t switch
         {
             ConflictType.BinaryFile => "📦",
-            ConflictType.StructuralChange => "🏗️",
             ConflictType.ImportConflict => "📚",
+            ConflictType.StructuralChange => "🏗️",
             ConflictType.SemanticConflict => "🧠",
             ConflictType.FileRenamed => "📝",
             _ => "⚡"
@@ -457,7 +395,7 @@ public class ConflictPredictor
     /// <summary>
     /// Analyze potential conflicts for a specific file
     /// </summary>
-    private ConflictPrediction? AnalyzeFileConflicts(
+    private ConflictPrediction AnalyzeFileConflicts(
         Repository repo,
         string filePath,
         List<CpCommit> commits,
@@ -483,7 +421,7 @@ public class ConflictPredictor
 
             // Analyze line-level conflicts for multiple commits
             var conflictDetails = AnalyzeLineConflicts(repo, filePath, commits);
-            var conflictType = DetermineConflictType(filePath, commits, conflictDetails);
+            var conflictType = DetermineConflictType(filePath, conflictDetails);
             var risk = CalculateConflictRisk(filePath, commits, targetModified, conflictDetails);
 
             return new ConflictPrediction
@@ -494,7 +432,7 @@ public class ConflictPredictor
                 Type = conflictType,
                 Description = GenerateRiskDescription(filePath, commits, risk, targetModified),
                 Details = conflictDetails,
-                ResolutionSuggestions = GenerateResolutionSuggestions(conflictType, commits, conflictDetails)
+                ResolutionSuggestions = GenerateResolutionSuggestions(conflictType)
             };
         }
         catch (Exception)
@@ -648,7 +586,7 @@ public class ConflictPredictor
     /// <summary>
     /// Determine the type of conflict based on file and changes
     /// </summary>
-    private ConflictType DetermineConflictType(string filePath, List<CpCommit> commits, List<ConflictDetail> details)
+    private ConflictType DetermineConflictType(string filePath, List<ConflictDetail> details)
     {
         var extension = Path.GetExtension(filePath).ToLowerInvariant();
 
@@ -760,7 +698,7 @@ public class ConflictPredictor
     /// <summary>
     /// Predict semantic conflicts across files
     /// </summary>
-    private List<ConflictPrediction> PredictSemanticConflicts(Repository repo, List<CpCommit> commits, Branch targetBranch)
+    private List<ConflictPrediction> PredictSemanticConflicts(List<CpCommit> commits)
     {
         var predictions = new List<ConflictPrediction>();
 
@@ -811,7 +749,7 @@ public class ConflictPredictor
     /// <summary>
     /// Generate resolution suggestions based on conflict type
     /// </summary>
-    private List<string> GenerateResolutionSuggestions(ConflictType type, List<CpCommit> commits, List<ConflictDetail> details)
+    private List<string> GenerateResolutionSuggestions(ConflictType type)
     {
         return type switch
         {

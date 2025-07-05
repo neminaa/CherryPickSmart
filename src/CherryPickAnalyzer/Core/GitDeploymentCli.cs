@@ -357,25 +357,7 @@ public class GitDeploymentCli : IDisposable
             }
         }
 
-        // Filter mergeToCherryPicks to only show maximal (superset) MRs
-        var maximalMerges = new HashSet<string>();
-        var mergeList = mergeToCherryPicks.ToList();
-        for (var i = 0; i < mergeList.Count; i++)
-        {
-            var (shaI, setI) = mergeList[i];
-            var isSubsumed = false;
-            for (var j = 0; j < mergeList.Count; j++)
-            {
-                if (i == j) continue;
-                var (_, setJ) = mergeList[j];
-                if (!setI.All(setJ.Contains)) continue;
-                isSubsumed = true;
-                break;
-            }
-            if (!isSubsumed)
-                maximalMerges.Add(shaI);
-        }
-
+        
         // Create tree for hierarchical file change display
         var tree = new Spectre.Console.Tree("📁 File Changes")
             .Style(Style.Parse("blue"));
@@ -422,7 +404,7 @@ public class GitDeploymentCli : IDisposable
                     // Add commit sub-nodes
                     foreach (var commit in fileChange.Commits)
                     {
-                        var isMergeWithCherry = mergeToCherryPicks.ContainsKey(commit.Sha) && maximalMerges.Contains(commit.Sha);
+                        var isMergeWithCherry = mergeToCherryPicks.ContainsKey(commit.Sha);
                         var isCherryPickCommit = cherryPickCommitShas.Contains(commit.Sha);
                         if (!showAllCommits)
                         {

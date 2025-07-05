@@ -54,7 +54,7 @@ public class GitDeploymentCli : IDisposable
 
             _branchValidator.ValidateBranches(options.SourceBranch, options.TargetBranch);
 
-            var analysis = await AnalyzeWithProgressAsync(options.SourceBranch, options.TargetBranch, cts.Token);
+            var analysis = await AnalyzeWithProgressAsync(options.SourceBranch, options.TargetBranch, "ancestry", cts.Token);
 
             switch (options.Format.ToLower())
             {
@@ -101,7 +101,7 @@ public class GitDeploymentCli : IDisposable
 
             _branchValidator.ValidateBranches(options.SourceBranch, options.TargetBranch);
 
-            var analysis = await AnalyzeWithProgressAsync(options.SourceBranch, options.TargetBranch);
+            var analysis = await AnalyzeWithProgressAsync(options.SourceBranch, options.TargetBranch, "ancestry");
 
             if (analysis.CherryPickAnalysis.NewCommits.Count == 0)
             {
@@ -155,6 +155,7 @@ public class GitDeploymentCli : IDisposable
     private async Task<DeploymentAnalysis> AnalyzeWithProgressAsync(
         string sourceBranch,
         string targetBranch,
+        string mergeHighlightMode,
         CancellationToken cancellationToken = default)
     {
         var analysis = new DeploymentAnalysis();
@@ -180,7 +181,7 @@ public class GitDeploymentCli : IDisposable
         if (analysis.HasContentDifferences)
         {
             analysis.ContentAnalysis = await GetDetailedContentAnalysisAsync(
-                sourceBranch, targetBranch, analysis.OutstandingCommits, analysis.CherryPickAnalysis.NewCommits, cancellationToken);
+                sourceBranch, targetBranch, analysis.OutstandingCommits, analysis.CherryPickAnalysis.NewCommits, mergeHighlightMode, cancellationToken);
         }
 
         return analysis;
@@ -191,6 +192,7 @@ public class GitDeploymentCli : IDisposable
         string targetBranch,
         List<CommitInfo> outstandingCommits,
         List<CommitInfo> newCherryPickCommits,
+        string mergeHighlightMode,
         CancellationToken cancellationToken = default)
     {
         var source = _branchValidator.GetBranch(sourceBranch);
@@ -268,19 +270,38 @@ public class GitDeploymentCli : IDisposable
             if (commit.Parents.Count() > 1) // merge commit
             {
                 var foundCherryPicks = new HashSet<string>();
-                var queue = new Queue<Commit>(commit.Parents);
-                int depth = 0;
-                while (queue.Count > 0 && depth < 100)
+                if (mergeHighlightMode == "message")
                 {
-                    var ancestor = queue.Dequeue();
-                    if (cherryPickCommitShas.Contains(ancestor.Sha))
+                    // Highlight if commit message contains "into 'sourceBranch'"
+                    if (commit.Message.Contains($"into '{sourceBranch}'", StringComparison.OrdinalIgnoreCase))
                     {
-                        foundCherryPicks.Add(ancestor.Sha);
-                        cherryPicksCoveredByMerge.Add(ancestor.Sha);
+                        // For message mode, just check if any cherry-pick commit is in ancestry (direct parents)
+                        foreach (var parent in commit.Parents)
+                        {
+                            if (cherryPickCommitShas.Contains(parent.Sha))
+                            {
+                                foundCherryPicks.Add(parent.Sha);
+                                cherryPicksCoveredByMerge.Add(parent.Sha);
+                            }
+                        }
                     }
-                    foreach (var p in ancestor.Parents)
-                        queue.Enqueue(p);
-                    depth++;
+                }
+                else // ancestry (default)
+                {
+                    var queue = new Queue<Commit>(commit.Parents);
+                    int depth = 0;
+                    while (queue.Count > 0 && depth < 100)
+                    {
+                        var ancestor = queue.Dequeue();
+                        if (cherryPickCommitShas.Contains(ancestor.Sha))
+                        {
+                            foundCherryPicks.Add(ancestor.Sha);
+                            cherryPicksCoveredByMerge.Add(ancestor.Sha);
+                        }
+                        foreach (var p in ancestor.Parents)
+                            queue.Enqueue(p);
+                        depth++;
+                    }
                 }
                 if (foundCherryPicks.Count > 0)
                     mergeToCherryPicks[commit.Sha] = foundCherryPicks;

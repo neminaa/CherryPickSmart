@@ -28,4 +28,7 @@ public class AnalyzeOptions
 
     [Option("timeout", Required = false, HelpText = "Timeout in seconds", Default = 300)]
     public int TimeoutSeconds { get; set; } = 300;
+
+    [Option("merge-highlight-mode", Required = false, HelpText = "How to highlight merge commits: ancestry (default) or message.", Default = "ancestry")]
+    public string MergeHighlightMode { get; set; } = "ancestry";
 }

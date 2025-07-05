@@ -6,7 +6,6 @@ using LibGit2Sharp;
 using Spectre.Console;
 using CherryPickOptions = CherryPickAnalyzer.Options.CherryPickOptions;
 using RepositoryStatus = CherryPickAnalyzer.Models.RepositoryStatus;
-using System.IO;
 
 namespace CherryPickAnalyzer.Core;
 
@@ -380,20 +379,22 @@ public class GitDeploymentCli : IDisposable
                         var isCoveredByMerge = cherryPicksCoveredByMerge.Contains(commit.Sha);
                         var isRecent = (DateTimeOffset.UtcNow - commit.Date).TotalDays <= 7;
                         string commitColor;
-                        string cherryIcon = "";
+                        var cherryIcon = "";
                         if (isMergeWithCherry)
                         {
                             commitColor = "bold magenta";
                             cherryIcon = "🍒 ";
                         }
-                        else if (isCherryPickCommit && isCoveredByMerge)
-                        {
-                            commitColor = "dim";
-                        }
                         else if (isCherryPickCommit)
                         {
-                            commitColor = "bold cyan";
-                            cherryIcon = "🌟 ";
+                            commitColor = "bold magenta";
+                            cherryIcon = "🍒 ";
+                            if (isCoveredByMerge)
+                            {
+                                commitColor = "dim cyan";
+                                cherryIcon = "";
+
+                            }
                         }
                         else if (isRecent)
                         {
@@ -427,18 +428,18 @@ public class GitDeploymentCli : IDisposable
         return analysis;
     }
 
-    private void AddFileToTree(Spectre.Console.Tree tree, string filePath, TreeNode fileNode)
+    private static void AddFileToTree(Spectre.Console.Tree tree, string filePath, TreeNode fileNode)
     {
         var pathParts = filePath.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
         object currentLevel = tree;
-        TreeNode currentNode = null;
 
         // Traverse or create folder nodes
         for (var i = 0; i < pathParts.Length - 1; i++)
         {
             var part = Markup.Escape(pathParts[i]);
             var nodes = currentLevel is Spectre.Console.Tree t ? t.Nodes : ((TreeNode)currentLevel).Nodes;
-            var existing = nodes.FirstOrDefault(n => n.ToString().Contains(part));
+            var existing = nodes.FirstOrDefault(n => n.ToString()!.Contains(part));
+            TreeNode currentNode;
             if (existing == null)
             {
                 var dirNode = new TreeNode(new Markup($"[blue]📁 {part}[/]"));

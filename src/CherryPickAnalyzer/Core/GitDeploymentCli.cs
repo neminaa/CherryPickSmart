@@ -63,7 +63,7 @@ public class GitDeploymentCli : IDisposable
 
             _branchValidator.ValidateBranches(options.SourceBranch, options.TargetBranch);
 
-            var analysis = await AnalyzeWithProgressAsync(options.SourceBranch, options.TargetBranch, options.MergeHighlightMode, excludeFiles, cts.Token);
+            var analysis = await AnalyzeWithProgressAsync(options.SourceBranch, options.TargetBranch, options.MergeHighlightMode, excludeFiles, options.ShowAllCommits, cts.Token);
 
             switch (options.Format.ToLower())
             {
@@ -120,7 +120,7 @@ public class GitDeploymentCli : IDisposable
             };
             var excludeFiles = new HashSet<string>(defaultExcludes, StringComparer.OrdinalIgnoreCase);
 
-            var analysis = await AnalyzeWithProgressAsync(options.SourceBranch, options.TargetBranch, "ancestry", excludeFiles, CancellationToken.None);
+            var analysis = await AnalyzeWithProgressAsync(options.SourceBranch, options.TargetBranch, "ancestry", excludeFiles, true, CancellationToken.None);
 
             if (analysis.CherryPickAnalysis.NewCommits.Count == 0)
             {
@@ -176,6 +176,7 @@ public class GitDeploymentCli : IDisposable
         string targetBranch,
         string mergeHighlightMode,
         HashSet<string> excludeFiles,
+        bool showAllCommits,
         CancellationToken cancellationToken = default)
     {
         var analysis = new DeploymentAnalysis();
@@ -201,7 +202,7 @@ public class GitDeploymentCli : IDisposable
         if (analysis.HasContentDifferences)
         {
             analysis.ContentAnalysis = await GetDetailedContentAnalysisAsync(
-                sourceBranch, targetBranch, analysis.OutstandingCommits, analysis.CherryPickAnalysis.NewCommits, mergeHighlightMode, excludeFiles, cancellationToken);
+                sourceBranch, targetBranch, analysis.OutstandingCommits, analysis.CherryPickAnalysis.NewCommits, mergeHighlightMode, excludeFiles, showAllCommits, cancellationToken);
         }
 
         return analysis;
@@ -214,6 +215,7 @@ public class GitDeploymentCli : IDisposable
         List<CommitInfo> newCherryPickCommits,
         string mergeHighlightMode,
         HashSet<string> excludeFiles,
+        bool showAllCommits,
         CancellationToken cancellationToken = default)
     {
         var source = _branchValidator.GetBranch(sourceBranch);
@@ -404,6 +406,11 @@ public class GitDeploymentCli : IDisposable
                     {
                         var isMergeWithCherry = mergeToCherryPicks.ContainsKey(commit.Sha);
                         var isCherryPickCommit = cherryPickCommitShas.Contains(commit.Sha);
+                        if (!showAllCommits)
+                        {
+                            if (!isMergeWithCherry && !isCherryPickCommit)
+                                continue;
+                        }
                         var isCoveredByMerge = cherryPicksCoveredByMerge.Contains(commit.Sha);
                         var isRecent = (DateTimeOffset.UtcNow - commit.Date).TotalDays <= 7;
                         string commitColor;

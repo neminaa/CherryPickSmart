@@ -35,4 +35,7 @@ public class AnalyzeOptions
 
     [Option("exclude-file", Required = false, HelpText = "File name to exclude from analysis. Can be specified multiple times.")]
     public IEnumerable<string> ExcludeFiles { get; set; } = new List<string>();
+
+    [Option("show-all-commits", Required = false, HelpText = "Show all commits in the file tree (default: false).")]
+    public bool ShowAllCommits { get; set; } = false;
 }

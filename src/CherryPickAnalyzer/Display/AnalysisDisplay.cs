@@ -2,9 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using GitCherryHelper.Models;
+using GitCherryHelper.Helpers;
 using Spectre.Console;
 
-namespace GitCherryHelper;
+namespace GitCherryHelper.Display;
 
 public class AnalysisDisplay
 {
@@ -66,42 +67,17 @@ public class AnalysisDisplay
                 .BorderColor(Color.Red));
         }
 
-        if (!analysis.HasContentDifferences || analysis.ContentAnalysis.ChangedFiles.Count == 0)
+        if (analysis.HasContentDifferences && analysis.ContentAnalysis.ChangedFiles.Count > 0)
         {
-            return;
+            // Show a summary of file changes since we already displayed them in real-time
+            var statsRow = $"📂 File Changes Summary: 📁 {analysis.ContentAnalysis.Stats.FilesChanged} files, " +
+                          $"[green]+{analysis.ContentAnalysis.Stats.LinesAdded}[/] " +
+                          $"[red]-{analysis.ContentAnalysis.Stats.LinesDeleted}[/] lines";
+
+            AnsiConsole.Write(new Panel(statsRow)
+                .Header("📊 Content Analysis Complete")
+                .BorderColor(Color.Yellow));
         }
-        var fileTable = new Table()
-            .AddColumn("Status")
-            .AddColumn("File")
-            .AddColumn("Changes")
-            .BorderColor(Color.Yellow);
-
-        foreach (var file in analysis.ContentAnalysis.ChangedFiles.Take(15))
-        {
-            var statusIcon = file.Status switch
-            {
-                "Added" => "[green]➕[/]",
-                "Modified" => "[yellow]🔄[/]",
-                "Deleted" => "[red]➖[/]",
-                "Renamed" => "[blue]📝[/]",
-                _ => "[dim]❓[/]"
-            };
-
-            fileTable.AddRow(
-                statusIcon,
-                file.NewPath,
-                $"[green]+{file.LinesAdded}[/] [red]-{file.LinesDeleted}[/]");
-        }
-
-        var statsRow =
-            "📂 File Changes" +
-            $"📁 {analysis.ContentAnalysis.Stats.FilesChanged} files, " +
-            $"[green]+{analysis.ContentAnalysis.Stats.LinesAdded}[/] " +
-            $"[red]-{analysis.ContentAnalysis.Stats.LinesDeleted}[/] lines";
-
-        AnsiConsole.Write(new Panel(fileTable)
-            .Header(statsRow)
-            .BorderColor(Color.Yellow));
     }
 
     public void DisplaySuggestions(DeploymentAnalysis analysis, string targetBranch)

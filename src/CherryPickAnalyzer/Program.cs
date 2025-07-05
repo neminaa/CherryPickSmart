@@ -1,5 +1,5 @@
 ﻿using CommandLine;
-using GitCherryHelper;
+using GitCherryHelper.Core;
 using GitCherryHelper.Options;
 using Spectre.Console;
 

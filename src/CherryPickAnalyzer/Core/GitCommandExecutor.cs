@@ -5,9 +5,10 @@ using System.Linq;
 using CliWrap;
 using CliWrap.Buffered;
 using GitCherryHelper.Models;
+using GitCherryHelper.Core;
 using Spectre.Console;
 
-namespace GitCherryHelper;
+namespace GitCherryHelper.Core;
 
 public class GitCommandExecutor
 {
@@ -126,4 +127,6 @@ public class GitCommandExecutor
 
         return 0;
     }
+
+    public Command GetGitCommand() => _gitCommand;
 }

@@ -111,26 +111,6 @@ dotnet run --project src/CherryPickAnalyzer -- cherry-pick -s develop -t main --
 dotnet run --project src/CherryPickAnalyzer -- cherry-pick -s develop -t main --execute
 ```
 
-## Project Structure
-
-```
-CherryPickAnalyzer/
-├── src/
-│   └── CherryPickAnalyzer/
-│       ├── Models/              # Data models
-│       ├── Options/             # Command-line option classes
-│       ├── Program.cs           # Main entry point
-│       ├── GitDeploymentCli.cs  # Main CLI logic
-│       ├── GitCommandExecutor.cs # Git command execution
-│       ├── CherryPickHelper.cs  # Cherry-pick utilities
-│       ├── CommitParser.cs      # Commit parsing utilities
-│       ├── BranchValidator.cs   # Branch validation
-│       ├── AnalysisDisplay.cs   # Analysis output formatting
-│       └── RepositoryInfoDisplay.cs # Repository info display
-├── CherryPickAnalyzer.sln       # Solution file
-└── README.md                    # This file
-```
-
 ## Dependencies
 
 - **CommandLineParser** (2.9.1) - Command-line argument parsing

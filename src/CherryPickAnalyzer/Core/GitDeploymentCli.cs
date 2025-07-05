@@ -3,12 +3,15 @@ using CliWrap;
 using CliWrap.Buffered;
 using GitCherryHelper.Models;
 using GitCherryHelper.Options;
+using GitCherryHelper.Display;
+using GitCherryHelper.Helpers;
 using LibGit2Sharp;
 using Spectre.Console;
 using CherryPickOptions = GitCherryHelper.Options.CherryPickOptions;
 using RepositoryStatus = GitCherryHelper.Models.RepositoryStatus;
+using Tree = LibGit2Sharp.Tree;
 
-namespace GitCherryHelper;
+namespace GitCherryHelper.Core;
 
 public class GitDeploymentCli : IDisposable
 {
@@ -170,7 +173,6 @@ public class GitDeploymentCli : IDisposable
             {
                 var commitTask = ctx.AddTask("[blue]Analyzing commits[/]");
                 var cherryTask = ctx.AddTask("[green]Cherry-pick analysis[/]");
-                var diffTask = ctx.AddTask("[yellow]Content analysis[/]");
 
                 commitTask.StartTask();
                 analysis.OutstandingCommits = await _gitExecutor.GetOutstandingCommitsAsync(sourceBranch, targetBranch, cancellationToken);
@@ -179,41 +181,95 @@ public class GitDeploymentCli : IDisposable
                 cherryTask.StartTask();
                 analysis.CherryPickAnalysis = await _gitExecutor.GetCherryPickAnalysisAsync(sourceBranch, targetBranch, cancellationToken);
                 cherryTask.Value = 100;
-
-                diffTask.StartTask();
-                analysis.HasContentDifferences = await _gitExecutor.CheckContentDifferencesAsync(sourceBranch, targetBranch, cancellationToken);
-
-                if (analysis.HasContentDifferences)
-                {
-                    analysis.ContentAnalysis = GetDetailedContentAnalysis(sourceBranch, targetBranch);
-                }
-                diffTask.Value = 100;
             });
+
+        // Check for content differences outside of progress bar
+        analysis.HasContentDifferences = await _gitExecutor.CheckContentDifferencesAsync(sourceBranch, targetBranch, cancellationToken);
+
+        if (analysis.HasContentDifferences)
+        {
+            analysis.ContentAnalysis = await GetDetailedContentAnalysisAsync(sourceBranch, targetBranch, cancellationToken);
+        }
 
         return analysis;
     }
 
-    private ContentAnalysis GetDetailedContentAnalysis(string sourceBranch, string targetBranch)
+    private async Task<ContentAnalysis> GetDetailedContentAnalysisAsync(
+        string sourceBranch, 
+        string targetBranch,
+        CancellationToken cancellationToken = default)
     {
         var source = _branchValidator.GetBranch(sourceBranch);
         var target = _branchValidator.GetBranch(targetBranch);
         var patch = _repo.Diff.Compare<Patch>(target.Tip.Tree, source.Tip.Tree);
-
+        
         var analysis = new ContentAnalysis { ChangedFiles = new List<FileChange>() };
         int totalAdded = 0, totalDeleted = 0;
 
-        foreach (var change in patch)
-        {
-            analysis.ChangedFiles.Add(new FileChange
+        // Get all commits between branches to map files to commits
+        var commits = await _gitExecutor.GetOutstandingCommitsAsync(sourceBranch, targetBranch, cancellationToken);
+        var fileToCommitMap = await BuildFileToCommitMapAsync(commits, sourceBranch, targetBranch, cancellationToken);
+
+        // Create live table for real-time file change display with commit info
+        var liveTable = new Table()
+            .AddColumn("Status")
+            .AddColumn("File")
+            .AddColumn("Changes")
+            .AddColumn("Commit")
+            .AddColumn("Author")
+            .BorderColor(Color.Yellow);
+
+        await AnsiConsole.Live(liveTable)
+            .StartAsync(async ctx =>
             {
-                NewPath = change.Path,
-                Status = change.Status.ToString(),
-                LinesAdded = change.LinesAdded,
-                LinesDeleted = change.LinesDeleted
+                foreach (var change in patch)
+                {
+                    if (cancellationToken.IsCancellationRequested) break;
+                    
+                    // Find the commit that introduced this change
+                    var commitInfo = fileToCommitMap.TryGetValue(change.Path, out var commit) ? commit : null;
+
+                    var fileChange = new FileChange
+                    {
+                        NewPath = change.Path,
+                        Status = change.Status.ToString(),
+                        LinesAdded = change.LinesAdded,
+                        LinesDeleted = change.LinesDeleted,
+                        CommitSha = commitInfo?.Sha ?? "",
+                        CommitMessage = commitInfo?.Message ?? "",
+                        Author = commitInfo?.Author ?? ""
+                    };
+
+                    analysis.ChangedFiles.Add(fileChange);
+                    totalAdded += change.LinesAdded;
+                    totalDeleted += change.LinesDeleted;
+
+                    // Add row to live table with status icon and commit info
+                    var statusIcon = fileChange.Status switch
+                    {
+                        "Added" => "[green]➕[/]",
+                        "Modified" => "[yellow]🔄[/]",
+                        "Deleted" => "[red]➖[/]",
+                        "Renamed" => "[blue]📝[/]",
+                        _ => "[dim]❓[/]"
+                    };
+
+                    var commitDisplay = commitInfo != null 
+                        ? $"[dim]{commitInfo.ShortSha}[/] {(commitInfo.Message.Length > 30 ? string.Concat(commitInfo.Message.AsSpan(0, 27), "...") : commitInfo.Message)}"
+                        : "[dim]Unknown[/]";
+
+                    liveTable.AddRow(
+                        statusIcon,
+                        fileChange.NewPath,
+                        $"[green]+{fileChange.LinesAdded}[/] [red]-{fileChange.LinesDeleted}[/]",
+                        commitDisplay,
+                        commitInfo?.Author ?? "[dim]Unknown[/]"
+                    );
+
+                    ctx.Refresh();
+                    await Task.Delay(10, cancellationToken); // Small delay for visual effect
+                }
             });
-            totalAdded += change.LinesAdded;
-            totalDeleted += change.LinesDeleted;
-        }
 
         analysis.Stats = new DiffStats
         {
@@ -223,6 +279,44 @@ public class GitDeploymentCli : IDisposable
         };
 
         return analysis;
+    }
+
+    private async Task<Dictionary<string, CommitInfo>> BuildFileToCommitMapAsync(
+        List<CommitInfo> commits, 
+        string sourceBranch, 
+        string targetBranch, 
+        CancellationToken cancellationToken)
+    {
+        var fileToCommitMap = new Dictionary<string, CommitInfo>();
+
+        foreach (var commit in commits.Take(50)) // Limit to first 50 commits for performance
+        {
+            try
+            {
+                // Get files changed in this commit
+                var result = await _gitExecutor.GetGitCommand()
+                    .WithArguments($"show --name-only --format=\"\" {commit.Sha}")
+                    .ExecuteBufferedAsync(cancellationToken);
+
+                if (result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.StandardOutput))
+                {
+                    var files = result.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                    foreach (var file in files)
+                    {
+                        if (!fileToCommitMap.ContainsKey(file))
+                        {
+                            fileToCommitMap[file] = commit;
+                        }
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // Continue if we can't get files for this commit
+            }
+        }
+
+        return fileToCommitMap;
     }
 
     public void Dispose()

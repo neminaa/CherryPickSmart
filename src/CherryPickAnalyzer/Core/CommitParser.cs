@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using GitCherryHelper.Models;
 
-namespace GitCherryHelper;
+namespace GitCherryHelper.Core;
 
 public static class CommitParser
 {

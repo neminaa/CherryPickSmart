@@ -1,7 +1,7 @@
 using System;
 using LibGit2Sharp;
 
-namespace GitCherryHelper;
+namespace GitCherryHelper.Core;
 
 public class BranchValidator
 {

@@ -3,7 +3,7 @@ using System.Linq;
 using GitCherryHelper.Models;
 using Spectre.Console;
 
-namespace GitCherryHelper;
+namespace GitCherryHelper.Helpers;
 
 public static class CherryPickHelper
 {

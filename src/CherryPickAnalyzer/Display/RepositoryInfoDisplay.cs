@@ -1,7 +1,7 @@
 using Spectre.Console;
 using GitCherryHelper.Models;
 
-namespace GitCherryHelper;
+namespace GitCherryHelper.Display;
 
 public class RepositoryInfoDisplay
 {

@@ -264,7 +264,10 @@ public class GitDeploymentCli : IDisposable
                         }
                         list.Add(commitInfo);
                         // Show live progress for each file being mapped
-                        var shortPath = entry.Path.Length > 50 ? "..." + entry.Path[^47..] : entry.Path;
+                        var shortPath = entry.Path.Length > 50
+                            ? "..." + entry.Path[^47..]
+                            : entry.Path.PadRight(50, '.');
+                        
                         commitTask.Description = $"[blue]Analyzing commits...:[/] {Markup.Escape(shortPath)} ([dim]{Markup.Escape(commitInfo.ShortSha)}[/] {Markup.Escape(commitInfo.Author)})";
                         ctx.Refresh();
                     }

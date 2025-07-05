@@ -195,7 +195,7 @@ public class GitDeploymentCli : IDisposable
         var target = _branchValidator.GetBranch(targetBranch);
         var patch = _repo.Diff.Compare<Patch>(target.Tip.Tree, source.Tip.Tree);
         
-        var analysis = new ContentAnalysis { ChangedFiles = new List<FileChange>() };
+        var analysis = new ContentAnalysis { ChangedFiles = [] };
         int totalAdded = 0, totalDeleted = 0;
 
         // Create tree for hierarchical file change display
@@ -205,14 +205,15 @@ public class GitDeploymentCli : IDisposable
         // Precompute file-to-commits map for efficiency with progress display
         var fileToCommits = new Dictionary<string, List<CommitInfo>>();
         await AnsiConsole.Progress()
-            .StartAsync(async ctx =>
+            .StartAsync(ctx =>
             {
                 var commitTask = ctx.AddTask("[blue]Analyzing commits...[/]");
-                int totalCommits = outstandingCommits.Count;
-                int processed = 0;
+                var totalCommits = outstandingCommits.Count;
+                var processed = 0;
+                
                 foreach (var commitInfo in outstandingCommits)
                 {
-                    var commit = _repo.Lookup<LibGit2Sharp.Commit>(commitInfo.Sha);
+                    var commit = _repo.Lookup<Commit>(commitInfo.Sha);
                     if (commit == null) { processed++; commitTask.Value = processed * 100.0 / totalCommits; continue; }
                     var parent = commit.Parents.FirstOrDefault();
                     if (parent == null) { processed++; commitTask.Value = processed * 100.0 / totalCommits; continue; }
@@ -221,18 +222,21 @@ public class GitDeploymentCli : IDisposable
                     {
                         if (!fileToCommits.TryGetValue(entry.Path, out var list))
                         {
-                            list = new List<CommitInfo>();
+                            list = [];
                             fileToCommits[entry.Path] = list;
                         }
                         list.Add(commitInfo);
                         // Show live progress for each file being mapped
                         var shortPath = entry.Path.Length > 50 ? "..." + entry.Path[^47..] : entry.Path;
-                        commitTask.Description = $"[blue]Mapping:[/] {Markup.Escape(shortPath)} ([dim]{Markup.Escape(commitInfo.ShortSha)}[/] {Markup.Escape(commitInfo.Author)})";
+                        commitTask.Description = $"[blue]Analyzing commits...:[/] {Markup.Escape(shortPath)} ([dim]{Markup.Escape(commitInfo.ShortSha)}[/] {Markup.Escape(commitInfo.Author)})";
                         ctx.Refresh();
                     }
                     processed++;
                     commitTask.Value = processed * 100.0 / totalCommits;
                 }
+                
+                commitTask.Description($"[green]Analyzed {processed} commits...:[/]");
+                return Task.CompletedTask;
             });
 
         await AnsiConsole.Live(tree)
@@ -248,7 +252,7 @@ public class GitDeploymentCli : IDisposable
                         Status = change.Status.ToString(),
                         LinesAdded = change.LinesAdded,
                         LinesDeleted = change.LinesDeleted,
-                        Commits = fileToCommits.TryGetValue(change.Path, out var commits) ? commits : new List<CommitInfo>()
+                        Commits = fileToCommits.TryGetValue(change.Path, out var commits) ? commits : []
                     };
 
                     analysis.ChangedFiles.Add(fileChange);
@@ -266,17 +270,17 @@ public class GitDeploymentCli : IDisposable
                     };
 
                     var fileName = Path.GetFileName(fileChange.NewPath);
-                    var commitCountBadge = fileChange.Commits.Count > 1 ? $" [grey][{fileChange.Commits.Count} commits][/grey]" : string.Empty;
+                    var commitCountBadge = fileChange.Commits.Count > 1 ? $" [grey]{fileChange.Commits.Count} commits[/grey]" : string.Empty;
                     var changeText = $"[green]+{fileChange.LinesAdded}[/] [red]-{fileChange.LinesDeleted}[/]";
-                    var fileNode = new Spectre.Console.TreeNode(new Markup($"{statusIcon} {Markup.Escape(fileName)}{commitCountBadge} {changeText}"));
+                    var fileNode = new TreeNode(new Markup($"{statusIcon} {Markup.Escape(fileName)}{commitCountBadge} {changeText}"));
 
                     // Add commit sub-nodes
                     foreach (var commit in fileChange.Commits)
                     {
                         var isRecent = (DateTimeOffset.UtcNow - commit.Date).TotalDays <= 7;
                         var commitColor = isRecent ? "bold yellow" : "dim";
-                        var commitText = $"[{commitColor}]{Markup.Escape(commit.ShortSha)}[/] [blue]{Markup.Escape(commit.Author)}[/]: {Markup.Escape(commit.Message)} [grey]({commit.Date:yyyy-MM-dd})[/]";
-                        fileNode.AddNode(new Spectre.Console.TreeNode(new Markup(commitText)));
+                        var commitText = $"[{commitColor}]{Markup.Escape(commit.ShortSha)}[/] [blue]{Markup.Escape(commit.Author)}[/]: {Markup.Escape(commit.Message)} [grey]({Markup.Escape(commit.Date.ToString("yyyy-MM-dd"))})[/]";
+                        fileNode.AddNode(new TreeNode(new Markup(commitText)));
                     }
 
                     // Add to tree based on file path structure (for now, just add to root)
@@ -297,21 +301,21 @@ public class GitDeploymentCli : IDisposable
         return analysis;
     }
 
-    private void AddFileToTree(Spectre.Console.Tree tree, string filePath, Spectre.Console.TreeNode fileNode)
+    private void AddFileToTree(Spectre.Console.Tree tree, string filePath, TreeNode fileNode)
     {
-        var pathParts = filePath.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+        var pathParts = filePath.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
         object currentLevel = tree;
-        Spectre.Console.TreeNode currentNode = null;
+        TreeNode currentNode = null;
 
         // Traverse or create folder nodes
-        for (int i = 0; i < pathParts.Length - 1; i++)
+        for (var i = 0; i < pathParts.Length - 1; i++)
         {
             var part = Markup.Escape(pathParts[i]);
-            var nodes = currentLevel is Spectre.Console.Tree t ? t.Nodes : ((Spectre.Console.TreeNode)currentLevel).Nodes;
+            var nodes = currentLevel is Spectre.Console.Tree t ? t.Nodes : ((TreeNode)currentLevel).Nodes;
             var existing = nodes.FirstOrDefault(n => n.ToString().Contains(part));
             if (existing == null)
             {
-                var dirNode = new Spectre.Console.TreeNode(new Markup($"[blue]📁 {part}[/]"));
+                var dirNode = new TreeNode(new Markup($"[blue]📁 {part}[/]"));
                 // Collapse folders with more than 5 children by default
                 if (nodes.Count > 5) dirNode.Collapse();
                 nodes.Add(dirNode);
@@ -325,7 +329,7 @@ public class GitDeploymentCli : IDisposable
         }
 
         // Add the file node to the correct folder
-        var fileParentNodes = currentLevel is Spectre.Console.Tree t2 ? t2.Nodes : ((Spectre.Console.TreeNode)currentLevel).Nodes;
+        var fileParentNodes = currentLevel is Spectre.Console.Tree t2 ? t2.Nodes : ((TreeNode)currentLevel).Nodes;
         fileParentNodes.Add(fileNode);
     }
 

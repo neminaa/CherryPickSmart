@@ -6,8 +6,10 @@ public static class CommitParser
 {
     public static List<CommitInfo> ParseCommitOutput(string output)
     {
-        return new List<CommitInfo>(from line in output
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+        return
+        [
+            ..from line in output
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
             let parts = line.Split('|')
             where parts.Length >= 5
             select new CommitInfo
@@ -17,6 +19,7 @@ public static class CommitParser
                 Message = parts[2],
                 Author = parts[3],
                 Date = DateTimeOffset.Parse(parts[4])
-            });
+            }
+        ];
     }
 }

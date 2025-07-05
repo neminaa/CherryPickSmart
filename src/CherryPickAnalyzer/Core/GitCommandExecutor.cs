@@ -56,7 +56,7 @@ public class GitCommandExecutor
         var newShas = new List<string>();
         var appliedShas = new List<string>();
 
-        foreach (var line in result.StandardOutput.Split('\n', System.StringSplitOptions.RemoveEmptyEntries))
+        foreach (var line in result.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
             if (line.StartsWith("+ "))
                 newShas.Add(line[2..]);

@@ -1,6 +1,6 @@
 ﻿using CommandLine;
 
-namespace GitCherryHelper.Options;
+namespace CherryPickAnalyzer.Options;
 
 [Verb("analyze", HelpText = "Analyze deployment differences between branches")]
 public class AnalyzeOptions

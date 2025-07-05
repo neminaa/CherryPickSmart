@@ -1,6 +1,6 @@
 ﻿using CommandLine;
 
-namespace GitCherryHelper.Options;
+namespace CherryPickAnalyzer.Options;
 
 [Verb("cherry-pick", HelpText = "Generate cherry-pick commands")]
 public class CherryPickOptions

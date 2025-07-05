@@ -1,11 +1,8 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using GitCherryHelper.Models;
-using GitCherryHelper.Helpers;
+using CherryPickAnalyzer.Helpers;
+using CherryPickAnalyzer.Models;
 using Spectre.Console;
 
-namespace GitCherryHelper.Display;
+namespace CherryPickAnalyzer.Display;
 
 public class AnalysisDisplay
 {

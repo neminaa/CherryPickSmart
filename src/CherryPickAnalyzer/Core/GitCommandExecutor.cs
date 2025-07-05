@@ -1,14 +1,9 @@
-using System.Threading;
-using System.Threading.Tasks;
-using System.Collections.Generic;
-using System.Linq;
+using CherryPickAnalyzer.Models;
 using CliWrap;
 using CliWrap.Buffered;
-using GitCherryHelper.Models;
-using GitCherryHelper.Core;
 using Spectre.Console;
 
-namespace GitCherryHelper.Core;
+namespace CherryPickAnalyzer.Core;
 
 public class GitCommandExecutor
 {
@@ -127,6 +122,4 @@ public class GitCommandExecutor
 
         return 0;
     }
-
-    public Command GetGitCommand() => _gitCommand;
 }

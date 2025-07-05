@@ -1,8 +1,6 @@
-using System;
-using System.Collections.Generic;
-using GitCherryHelper.Models;
+using CherryPickAnalyzer.Models;
 
-namespace GitCherryHelper.Core;
+namespace CherryPickAnalyzer.Core;
 
 public static class CommitParser
 {

@@ -1,4 +1,4 @@
-﻿namespace GitCherryHelper.Models;
+﻿namespace CherryPickAnalyzer.Models;
 
 public class CommitInfo
 {

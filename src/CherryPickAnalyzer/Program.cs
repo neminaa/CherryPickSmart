@@ -1,6 +1,6 @@
-﻿using CommandLine;
-using GitCherryHelper.Core;
-using GitCherryHelper.Options;
+﻿using CherryPickAnalyzer.Core;
+using CherryPickAnalyzer.Options;
+using CommandLine;
 using Spectre.Console;
 
 

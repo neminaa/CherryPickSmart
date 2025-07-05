@@ -1,7 +1,7 @@
+using CherryPickAnalyzer.Models;
 using Spectre.Console;
-using GitCherryHelper.Models;
 
-namespace GitCherryHelper.Display;
+namespace CherryPickAnalyzer.Display;
 
 public class RepositoryInfoDisplay
 {

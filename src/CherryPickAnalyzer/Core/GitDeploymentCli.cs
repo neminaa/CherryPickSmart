@@ -1,45 +1,35 @@
-﻿using System.Text.Json;
-using CliWrap;
-using CliWrap.Buffered;
-using GitCherryHelper.Models;
-using GitCherryHelper.Options;
-using GitCherryHelper.Display;
-using GitCherryHelper.Helpers;
+﻿using CherryPickAnalyzer.Display;
+using CherryPickAnalyzer.Helpers;
+using CherryPickAnalyzer.Models;
+using CherryPickAnalyzer.Options;
 using LibGit2Sharp;
 using Spectre.Console;
-using CherryPickOptions = GitCherryHelper.Options.CherryPickOptions;
-using RepositoryStatus = GitCherryHelper.Models.RepositoryStatus;
-using Tree = LibGit2Sharp.Tree;
+using CherryPickOptions = CherryPickAnalyzer.Options.CherryPickOptions;
+using RepositoryStatus = CherryPickAnalyzer.Models.RepositoryStatus;
 
-namespace GitCherryHelper.Core;
+namespace CherryPickAnalyzer.Core;
 
 public class GitDeploymentCli : IDisposable
 {
     private readonly Repository _repo;
-    private readonly string _repoPath;
     private readonly GitCommandExecutor _gitExecutor;
     private readonly BranchValidator _branchValidator;
     private readonly RepositoryInfoDisplay _repoInfoDisplay;
     private readonly AnalysisDisplay _analysisDisplay;
 
-    private static readonly System.Text.Json.JsonSerializerOptions CachedJsonSerializerOptions = new()
-    {
-        WriteIndented = true
-    };
-
     public GitDeploymentCli(string repoPath)
     {
-        _repoPath = Path.GetFullPath(repoPath);
+        var repoPath1 = Path.GetFullPath(repoPath);
 
-        if (!Repository.IsValid(_repoPath))
+        if (!Repository.IsValid(repoPath1))
         {
-            throw new InvalidOperationException($"'{_repoPath}' is not a valid git repository");
+            throw new InvalidOperationException($"'{repoPath1}' is not a valid git repository");
         }
 
-        _repo = new Repository(_repoPath);
-        _gitExecutor = new GitCommandExecutor(_repoPath);
+        _repo = new Repository(repoPath1);
+        _gitExecutor = new GitCommandExecutor(repoPath1);
         _branchValidator = new BranchValidator(_repo);
-        _repoInfoDisplay = new RepositoryInfoDisplay(_repoPath, GetRepositoryStatus());
+        _repoInfoDisplay = new RepositoryInfoDisplay(repoPath1, GetRepositoryStatus());
         _analysisDisplay = new AnalysisDisplay();
     }
 
@@ -206,17 +196,11 @@ public class GitDeploymentCli : IDisposable
         var analysis = new ContentAnalysis { ChangedFiles = new List<FileChange>() };
         int totalAdded = 0, totalDeleted = 0;
 
-        // Get all commits between branches to map files to commits
-        var commits = await _gitExecutor.GetOutstandingCommitsAsync(sourceBranch, targetBranch, cancellationToken);
-        var fileToCommitMap = await BuildFileToCommitMapAsync(commits, sourceBranch, targetBranch, cancellationToken);
-
-        // Create live table for real-time file change display with commit info
+        // Create live table for real-time file change display
         var liveTable = new Table()
             .AddColumn("Status")
             .AddColumn("File")
             .AddColumn("Changes")
-            .AddColumn("Commit")
-            .AddColumn("Author")
             .BorderColor(Color.Yellow);
 
         await AnsiConsole.Live(liveTable)
@@ -226,25 +210,19 @@ public class GitDeploymentCli : IDisposable
                 {
                     if (cancellationToken.IsCancellationRequested) break;
                     
-                    // Find the commit that introduced this change
-                    var commitInfo = fileToCommitMap.TryGetValue(change.Path, out var commit) ? commit : null;
-
                     var fileChange = new FileChange
                     {
                         NewPath = change.Path,
                         Status = change.Status.ToString(),
                         LinesAdded = change.LinesAdded,
-                        LinesDeleted = change.LinesDeleted,
-                        CommitSha = commitInfo?.Sha ?? "",
-                        CommitMessage = commitInfo?.Message ?? "",
-                        Author = commitInfo?.Author ?? ""
+                        LinesDeleted = change.LinesDeleted
                     };
 
                     analysis.ChangedFiles.Add(fileChange);
                     totalAdded += change.LinesAdded;
                     totalDeleted += change.LinesDeleted;
 
-                    // Add row to live table with status icon and commit info
+                    // Add row to live table with status icon
                     var statusIcon = fileChange.Status switch
                     {
                         "Added" => "[green]➕[/]",
@@ -254,16 +232,10 @@ public class GitDeploymentCli : IDisposable
                         _ => "[dim]❓[/]"
                     };
 
-                    var commitDisplay = commitInfo != null 
-                        ? $"[dim]{commitInfo.ShortSha}[/] {(commitInfo.Message.Length > 30 ? string.Concat(commitInfo.Message.AsSpan(0, 27), "...") : commitInfo.Message)}"
-                        : "[dim]Unknown[/]";
-
                     liveTable.AddRow(
                         statusIcon,
                         fileChange.NewPath,
-                        $"[green]+{fileChange.LinesAdded}[/] [red]-{fileChange.LinesDeleted}[/]",
-                        commitDisplay,
-                        commitInfo?.Author ?? "[dim]Unknown[/]"
+                        $"[green]+{fileChange.LinesAdded}[/] [red]-{fileChange.LinesDeleted}[/]"
                     );
 
                     ctx.Refresh();
@@ -279,44 +251,6 @@ public class GitDeploymentCli : IDisposable
         };
 
         return analysis;
-    }
-
-    private async Task<Dictionary<string, CommitInfo>> BuildFileToCommitMapAsync(
-        List<CommitInfo> commits, 
-        string sourceBranch, 
-        string targetBranch, 
-        CancellationToken cancellationToken)
-    {
-        var fileToCommitMap = new Dictionary<string, CommitInfo>();
-
-        foreach (var commit in commits.Take(50)) // Limit to first 50 commits for performance
-        {
-            try
-            {
-                // Get files changed in this commit
-                var result = await _gitExecutor.GetGitCommand()
-                    .WithArguments($"show --name-only --format=\"\" {commit.Sha}")
-                    .ExecuteBufferedAsync(cancellationToken);
-
-                if (result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.StandardOutput))
-                {
-                    var files = result.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-                    foreach (var file in files)
-                    {
-                        if (!fileToCommitMap.ContainsKey(file))
-                        {
-                            fileToCommitMap[file] = commit;
-                        }
-                    }
-                }
-            }
-            catch (Exception)
-            {
-                // Continue if we can't get files for this commit
-            }
-        }
-
-        return fileToCommitMap;
     }
 
     public void Dispose()

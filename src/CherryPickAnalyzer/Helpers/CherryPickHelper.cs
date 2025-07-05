@@ -1,9 +1,7 @@
-using System.Collections.Generic;
-using System.Linq;
-using GitCherryHelper.Models;
+using CherryPickAnalyzer.Models;
 using Spectre.Console;
 
-namespace GitCherryHelper.Helpers;
+namespace CherryPickAnalyzer.Helpers;
 
 public static class CherryPickHelper
 {

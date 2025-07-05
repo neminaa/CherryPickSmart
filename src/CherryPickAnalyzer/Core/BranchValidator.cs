@@ -1,7 +1,6 @@
-using System;
 using LibGit2Sharp;
 
-namespace GitCherryHelper.Core;
+namespace CherryPickAnalyzer.Core;
 
 public class BranchValidator
 {

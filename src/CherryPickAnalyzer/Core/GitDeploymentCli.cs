@@ -33,6 +33,7 @@ public class GitDeploymentCli : IDisposable
         _analysisDisplay = new AnalysisDisplay();
     }
 
+    #region Public API
     public async Task<int> AnalyzeAsync(AnalyzeOptions options)
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(options.TimeoutSeconds));
@@ -161,18 +162,15 @@ public class GitDeploymentCli : IDisposable
         }
     }
 
-    private RepositoryStatus GetRepositoryStatus()
+    public void Dispose()
     {
-        var status = _repo.RetrieveStatus();
-        return new RepositoryStatus
-        {
-            HasUncommittedChanges = status.IsDirty,
-            UntrackedFiles = [.. status.Untracked.Select(f => f.FilePath)],
-            ModifiedFiles = [.. status.Modified.Select(f => f.FilePath)],
-            StagedFiles = [.. status.Staged.Select(f => f.FilePath)]
-        };
-    }
+        _repo.Dispose();
 
+        GC.SuppressFinalize(this);
+    }
+    #endregion
+
+    #region Progress Logic
     private async Task<DeploymentAnalysis> AnalyzeWithProgressAsync(
         string sourceBranch,
         string targetBranch,
@@ -360,6 +358,27 @@ public class GitDeploymentCli : IDisposable
             }
         }
 
+        // Filter mergeToCherryPicks to only show maximal (superset) MRs
+        var maximalMerges = new HashSet<string>();
+        var mergeList = mergeToCherryPicks.ToList();
+        for (int i = 0; i < mergeList.Count; i++)
+        {
+            var (shaI, setI) = mergeList[i];
+            bool isSubsumed = false;
+            for (int j = 0; j < mergeList.Count; j++)
+            {
+                if (i == j) continue;
+                var (_, setJ) = mergeList[j];
+                if (setI.All(setJ.Contains))
+                {
+                    isSubsumed = true;
+                    break;
+                }
+            }
+            if (!isSubsumed)
+                maximalMerges.Add(shaI);
+        }
+
         // Create tree for hierarchical file change display
         var tree = new Spectre.Console.Tree("📁 File Changes")
             .Style(Style.Parse("blue"));
@@ -406,7 +425,7 @@ public class GitDeploymentCli : IDisposable
                     // Add commit sub-nodes
                     foreach (var commit in fileChange.Commits)
                     {
-                        var isMergeWithCherry = mergeToCherryPicks.ContainsKey(commit.Sha);
+                        var isMergeWithCherry = mergeToCherryPicks.ContainsKey(commit.Sha) && maximalMerges.Contains(commit.Sha);
                         var isCherryPickCommit = cherryPickCommitShas.Contains(commit.Sha);
                         if (!showAllCommits)
                         {
@@ -463,7 +482,7 @@ public class GitDeploymentCli : IDisposable
                     }
 
                     // Add to tree based on file path structure (for now, just add to root)
-                    AddFileToTree(tree, fileChange.NewPath, fileNode);
+                    FileTreeHelper.AddFileToTree(tree, fileChange.NewPath, fileNode);
 
                     ctx.Refresh();
                     await Task.Delay(10, cancellationToken); // Small delay for visual effect
@@ -481,43 +500,19 @@ public class GitDeploymentCli : IDisposable
 
         return analysis;
     }
+    #endregion
 
-    private static void AddFileToTree(Spectre.Console.Tree tree, string filePath, TreeNode fileNode)
+    #region Private Helpers
+    private RepositoryStatus GetRepositoryStatus()
     {
-        var pathParts = filePath.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
-        object currentLevel = tree;
-
-        // Traverse or create folder nodes
-        for (var i = 0; i < pathParts.Length - 1; i++)
+        var status = _repo.RetrieveStatus();
+        return new RepositoryStatus
         {
-            var part = Markup.Escape(pathParts[i]);
-            var nodes = currentLevel is Spectre.Console.Tree t ? t.Nodes : ((TreeNode)currentLevel).Nodes;
-            var existing = nodes.FirstOrDefault(n => n.ToString()!.Contains(part));
-            TreeNode currentNode;
-            if (existing == null)
-            {
-                var dirNode = new TreeNode(new Markup($"[blue]📁 {part}[/]"));
-                // Collapse folders with more than 5 children by default
-                //if (nodes.Count > 5) dirNode.Collapse();
-                nodes.Add(dirNode);
-                currentNode = dirNode;
-            }
-            else
-            {
-                currentNode = existing;
-            }
-            currentLevel = currentNode;
-        }
-
-        // Add the file node to the correct folder
-        var fileParentNodes = currentLevel is Spectre.Console.Tree t2 ? t2.Nodes : ((TreeNode)currentLevel).Nodes;
-        fileParentNodes.Add(fileNode);
+            HasUncommittedChanges = status.IsDirty,
+            UntrackedFiles = [.. status.Untracked.Select(f => f.FilePath)],
+            ModifiedFiles = [.. status.Modified.Select(f => f.FilePath)],
+            StagedFiles = [.. status.Staged.Select(f => f.FilePath)]
+        };
     }
-
-    public void Dispose()
-    {
-        _repo.Dispose();
-
-        GC.SuppressFinalize(this);
-    }
+    #endregion
 }

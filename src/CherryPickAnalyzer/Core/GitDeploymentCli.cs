@@ -286,9 +286,8 @@ public class GitDeploymentCli : IDisposable
         var cherryPicksCoveredByMerge = new HashSet<string>();
         // Collect all relevant commits (from all files)
         var allRelevantCommits = new HashSet<string>();
-        foreach (var commitList in fileToCommits.Values)
-            foreach (var c in commitList)
-                allRelevantCommits.Add(c.Sha);
+        foreach (var c in fileToCommits.Values.SelectMany(commitList => commitList))
+            allRelevantCommits.Add(c.Sha);
 
         // For ancestry mode: collect merge SHAs in first-parent history of source branch
         var firstParentMerges = new HashSet<string>();
@@ -339,7 +338,7 @@ public class GitDeploymentCli : IDisposable
                     }
                     
                     var queue = new Queue<Commit>(commit.Parents);
-                    int depth = 0;
+                    var depth = 0;
                     while (queue.Count > 0 && depth < 100)
                     {
                         var ancestor = queue.Dequeue();
@@ -361,19 +360,17 @@ public class GitDeploymentCli : IDisposable
         // Filter mergeToCherryPicks to only show maximal (superset) MRs
         var maximalMerges = new HashSet<string>();
         var mergeList = mergeToCherryPicks.ToList();
-        for (int i = 0; i < mergeList.Count; i++)
+        for (var i = 0; i < mergeList.Count; i++)
         {
             var (shaI, setI) = mergeList[i];
-            bool isSubsumed = false;
-            for (int j = 0; j < mergeList.Count; j++)
+            var isSubsumed = false;
+            for (var j = 0; j < mergeList.Count; j++)
             {
                 if (i == j) continue;
                 var (_, setJ) = mergeList[j];
-                if (setI.All(setJ.Contains))
-                {
-                    isSubsumed = true;
-                    break;
-                }
+                if (!setI.All(setJ.Contains)) continue;
+                isSubsumed = true;
+                break;
             }
             if (!isSubsumed)
                 maximalMerges.Add(shaI);

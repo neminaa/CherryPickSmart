@@ -179,7 +179,8 @@ public class GitDeploymentCli : IDisposable
 
         if (analysis.HasContentDifferences)
         {
-            analysis.ContentAnalysis = await GetDetailedContentAnalysisAsync(sourceBranch, targetBranch, analysis.OutstandingCommits, cancellationToken);
+            analysis.ContentAnalysis = await GetDetailedContentAnalysisAsync(
+                sourceBranch, targetBranch, analysis.OutstandingCommits, analysis.CherryPickAnalysis.NewCommits, cancellationToken);
         }
 
         return analysis;
@@ -189,6 +190,7 @@ public class GitDeploymentCli : IDisposable
         string sourceBranch, 
         string targetBranch,
         List<CommitInfo> outstandingCommits,
+        List<CommitInfo> newCherryPickCommits,
         CancellationToken cancellationToken = default)
     {
         var source = _branchValidator.GetBranch(sourceBranch);
@@ -198,9 +200,21 @@ public class GitDeploymentCli : IDisposable
         var analysis = new ContentAnalysis { ChangedFiles = [] };
         int totalAdded = 0, totalDeleted = 0;
 
-        // Create tree for hierarchical file change display
-        var tree = new Spectre.Console.Tree("📁 File Changes")
-            .Style(Style.Parse("blue"));
+        // Build set of files touched by new cherry-pick commits
+        var cherryPickFiles = new HashSet<string>();
+        var cherryPickCommitShas = new HashSet<string>(newCherryPickCommits.Select(c => c.Sha));
+        foreach (var commitInfo in newCherryPickCommits)
+        {
+            var commit = _repo.Lookup<Commit>(commitInfo.Sha);
+            if (commit == null) continue;
+            var parent = commit.Parents.FirstOrDefault();
+            if (parent == null) continue;
+            var commitPatch = _repo.Diff.Compare<Patch>(parent.Tree, commit.Tree);
+            foreach (var entry in commitPatch)
+            {
+                cherryPickFiles.Add(entry.Path);
+            }
+        }
 
         // Precompute file-to-commits map for efficiency with progress display
         var fileToCommits = new Dictionary<string, List<CommitInfo>>();
@@ -239,7 +253,46 @@ public class GitDeploymentCli : IDisposable
                 return Task.CompletedTask;
             });
 
+        // Precompute merge commit coverage
+        var mergeToCherryPicks = new Dictionary<string, HashSet<string>>();
+        var cherryPicksCoveredByMerge = new HashSet<string>();
+        // Collect all relevant commits (from all files)
+        var allRelevantCommits = new HashSet<string>();
+        foreach (var commitList in fileToCommits.Values)
+            foreach (var c in commitList)
+                allRelevantCommits.Add(c.Sha);
+        foreach (var sha in allRelevantCommits)
+        {
+            var commit = _repo.Lookup<Commit>(sha);
+            if (commit == null) continue;
+            if (commit.Parents.Count() > 1) // merge commit
+            {
+                var foundCherryPicks = new HashSet<string>();
+                var queue = new Queue<Commit>(commit.Parents);
+                int depth = 0;
+                while (queue.Count > 0 && depth < 100)
+                {
+                    var ancestor = queue.Dequeue();
+                    if (cherryPickCommitShas.Contains(ancestor.Sha))
+                    {
+                        foundCherryPicks.Add(ancestor.Sha);
+                        cherryPicksCoveredByMerge.Add(ancestor.Sha);
+                    }
+                    foreach (var p in ancestor.Parents)
+                        queue.Enqueue(p);
+                    depth++;
+                }
+                if (foundCherryPicks.Count > 0)
+                    mergeToCherryPicks[commit.Sha] = foundCherryPicks;
+            }
+        }
+
+        // Create tree for hierarchical file change display
+        var tree = new Spectre.Console.Tree("📁 File Changes")
+            .Style(Style.Parse("blue"));
+
         await AnsiConsole.Live(tree)
+            .AutoClear(true)
             .StartAsync(async ctx =>
             {
                 foreach (var change in patch)
@@ -270,16 +323,42 @@ public class GitDeploymentCli : IDisposable
                     };
 
                     var fileName = Path.GetFileName(fileChange.NewPath);
-                    var commitCountBadge = fileChange.Commits.Count > 1 ? $" [grey]{fileChange.Commits.Count} commits[/grey]" : string.Empty;
+                    var commitCountBadge = fileChange.Commits.Count > 1 ? $" [grey]{fileChange.Commits.Count} commits[/]" : string.Empty;
                     var changeText = $"[green]+{fileChange.LinesAdded}[/] [red]-{fileChange.LinesDeleted}[/]";
                     var fileNode = new TreeNode(new Markup($"{statusIcon} {Markup.Escape(fileName)}{commitCountBadge} {changeText}"));
 
                     // Add commit sub-nodes
                     foreach (var commit in fileChange.Commits)
                     {
+                        var isMergeWithCherry = mergeToCherryPicks.ContainsKey(commit.Sha);
+                        var isCherryPickCommit = cherryPickCommitShas.Contains(commit.Sha);
+                        var isCoveredByMerge = cherryPicksCoveredByMerge.Contains(commit.Sha);
                         var isRecent = (DateTimeOffset.UtcNow - commit.Date).TotalDays <= 7;
-                        var commitColor = isRecent ? "bold yellow" : "dim";
-                        var commitText = $"[{commitColor}]{Markup.Escape(commit.ShortSha)}[/] [blue]{Markup.Escape(commit.Author)}[/]: {Markup.Escape(commit.Message)} [grey]({Markup.Escape(commit.Date.ToString("yyyy-MM-dd"))})[/]";
+                        string commitColor;
+                        string cherryIcon = "";
+                        if (isMergeWithCherry)
+                        {
+                            commitColor = "bold magenta";
+                            cherryIcon = "🍒 ";
+                        }
+                        else if (isCherryPickCommit && isCoveredByMerge)
+                        {
+                            commitColor = "dim";
+                        }
+                        else if (isCherryPickCommit)
+                        {
+                            commitColor = "bold magenta";
+                            cherryIcon = "🍒 ";
+                        }
+                        else if (isRecent)
+                        {
+                            commitColor = "bold yellow";
+                        }
+                        else
+                        {
+                            commitColor = "dim";
+                        }
+                        var commitText = $"[{commitColor}]{cherryIcon}{Markup.Escape(commit.ShortSha)}[/] [blue]{Markup.Escape(commit.Author)}[/]: {Markup.Escape(commit.Message)} [grey]({commit.Date:yyyy-MM-dd})[/]";
                         fileNode.AddNode(new TreeNode(new Markup(commitText)));
                     }
 
@@ -290,6 +369,8 @@ public class GitDeploymentCli : IDisposable
                     await Task.Delay(10, cancellationToken); // Small delay for visual effect
                 }
             });
+        // Print the tree again so it remains visible after the live context
+        AnsiConsole.Write(tree);
 
         analysis.Stats = new DiffStats
         {
@@ -317,7 +398,7 @@ public class GitDeploymentCli : IDisposable
             {
                 var dirNode = new TreeNode(new Markup($"[blue]📁 {part}[/]"));
                 // Collapse folders with more than 5 children by default
-                if (nodes.Count > 5) dirNode.Collapse();
+                //if (nodes.Count > 5) dirNode.Collapse();
                 nodes.Add(dirNode);
                 currentNode = dirNode;
             }

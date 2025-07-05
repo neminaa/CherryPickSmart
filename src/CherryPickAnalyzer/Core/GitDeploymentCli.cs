@@ -263,12 +263,31 @@ public class GitDeploymentCli : IDisposable
         foreach (var commitList in fileToCommits.Values)
             foreach (var c in commitList)
                 allRelevantCommits.Add(c.Sha);
+
+        // For ancestry mode: collect merge SHAs in first-parent history of source branch
+        var firstParentMerges = new HashSet<string>();
+        if (mergeHighlightMode == "ancestry")
+        {
+            var branch = _repo.Branches[sourceBranch];
+            if (branch != null && branch.Tip != null)
+            {
+                var commit = branch.Tip;
+                while (commit != null)
+                {
+                    if (commit.Parents.Count() > 1)
+                        firstParentMerges.Add(commit.Sha);
+                    commit = commit.Parents.FirstOrDefault();
+                }
+            }
+        }
+
         foreach (var sha in allRelevantCommits)
         {
             var commit = _repo.Lookup<Commit>(sha);
             if (commit == null) continue;
-            if (commit.Parents.Count() > 1) // merge commit
+            if (commit.Parents.Count() > 1)
             {
+                // Only consider merge commits in first-parent history for ancestry mode
                 var foundCherryPicks = new HashSet<string>();
                 if (mergeHighlightMode == "message")
                 {
@@ -288,6 +307,11 @@ public class GitDeploymentCli : IDisposable
                 }
                 else // ancestry (default)
                 {
+                    if (!firstParentMerges.Contains(commit.Sha))
+                    {
+                        continue;
+                    }
+                    
                     var queue = new Queue<Commit>(commit.Parents);
                     int depth = 0;
                     while (queue.Count > 0 && depth < 100)

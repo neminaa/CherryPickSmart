@@ -458,6 +458,25 @@ public class GitDeploymentCli : IDisposable
                             }
                         }
 
+                        var commitObj = _repo.Lookup<LibGit2Sharp.Commit>(commit.Sha);
+                        if (commitObj != null)
+                        {
+                            var changedFiles = FileTreeHelper.GetFilesChangedByCommit(_repo, commitObj);
+                            foreach (var changedFile in changedFiles)
+                            {
+                                var fileStatusIcon = changedFile.Status switch
+                                {
+                                    "Added" => "[green]➕[/]",
+                                    "Modified" => "[yellow]🔄[/]",
+                                    "Deleted" => "[red]➖[/]",
+                                    "Renamed" => "[blue]📝[/]",
+                                    _ => "[dim]❓[/]"
+                                };
+                                var fileChangeText = $"[green]+{changedFile.LinesAdded}[/] [red]-{changedFile.LinesDeleted}[/]";
+                                AnsiConsole.MarkupLine($"  • {fileStatusIcon} {Markup.Escape(changedFile.NewPath)} {fileChangeText}");
+                            }
+                        }
+
                     }
 
                     // Add to tree based on file path structure (for now, just add to root)

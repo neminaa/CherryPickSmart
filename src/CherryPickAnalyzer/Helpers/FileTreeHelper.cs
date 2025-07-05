@@ -1,4 +1,6 @@
 using Spectre.Console;
+using LibGit2Sharp;
+using CherryPickAnalyzer.Models;
 
 namespace CherryPickAnalyzer.Helpers;
 
@@ -28,5 +30,24 @@ public static class FileTreeHelper
         }
         var fileParentNodes = currentLevel is Spectre.Console.Tree t2 ? t2.Nodes : ((TreeNode)currentLevel).Nodes;
         fileParentNodes.Add(fileNode);
+    }
+
+    public static List<FileChange> GetFilesChangedByCommit(Repository repo, Commit commit)
+    {
+        var result = new List<FileChange>();
+        var parent = commit.Parents.FirstOrDefault();
+        if (parent == null) return result;
+        var patch = repo.Diff.Compare<Patch>(parent.Tree, commit.Tree);
+        foreach (var change in patch)
+        {
+            result.Add(new FileChange
+            {
+                NewPath = change.Path,
+                Status = change.Status.ToString(),
+                LinesAdded = change.LinesAdded,
+                LinesDeleted = change.LinesDeleted
+            });
+        }
+        return result;
     }
 } 

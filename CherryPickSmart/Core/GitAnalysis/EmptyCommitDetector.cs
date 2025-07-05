@@ -174,7 +174,8 @@ public class EmptyCommitDetector(string repositoryPath, EmptyCommitDetectorOptio
                 // Each task gets its own repo instance
                 using var taskRepo = new Repository(repositoryPath);
                 var taskTargetBranch = taskRepo.Branches[targetBranch];
-                var taskTargetTree = taskRepo.Lookup<Tree>(targetTreeSha);
+               // var taskTargetTree = taskRepo.Lookup<Tree>(targetTreeSha);
+               var taskTargetTree = taskTargetBranch.Tip.Tree;
 
                 try
                 {
@@ -201,6 +202,7 @@ public class EmptyCommitDetector(string repositoryPath, EmptyCommitDetectorOptio
                 progress?.Report(new DetectionProgress
                 {
                     ProcessedCommits = current,
+                    EmptyCommits = emptyCommits.Count,
                     TotalCommits = totalCount,
                     CurrentCommit = commit.Sha,
                     PercentComplete = (current * 100.0) / totalCount
@@ -267,11 +269,11 @@ public class EmptyCommitDetector(string repositoryPath, EmptyCommitDetectorOptio
 
             var commit = repo.Lookup<Commit>(cpCommit.Sha);
             if (commit == null) return null;
-
+            
             // For merge commits, check if all changes are already in target
             if (cpCommit.IsMergeCommit)
             {
-                return CheckMergeCommitEmpty(repo, commit, targetBranch, targetCommitShas);
+                return CheckMergeCommitEmpty(repo, commit, targetBranch, targetCommitShas, targetTree);
             }
 
             // For regular commits, check if the exact changes exist
@@ -306,8 +308,7 @@ public class EmptyCommitDetector(string repositoryPath, EmptyCommitDetectorOptio
             return CheckRootCommitEmpty(repo, commit, targetBranch);
         }
 
-        var parent = commit.Parents.First();
-        var sourceChanges = repo.Diff.Compare<TreeChanges>(parent.Tree, commit.Tree);
+        var sourceChanges = repo.Diff.Compare<TreeChanges>(commit.Tree, targetTree);
 
         // Check if all changes from this commit already exist in target
         var allChangesFound = true;
@@ -322,13 +323,11 @@ public class EmptyCommitDetector(string repositoryPath, EmptyCommitDetectorOptio
                 allChangesFound = false;
                 break;
             }
-            else
-            {
-                reasonParts.Add($"{change.Path} already has these changes");
-            }
+
+            reasonParts.Add($"{change.Path} already has these changes");
         }
 
-        if (allChangesFound && sourceChanges.Count > 0)
+        if (allChangesFound)
         {
             return new EmptyCommitInfo
             {
@@ -357,7 +356,8 @@ public class EmptyCommitDetector(string repositoryPath, EmptyCommitDetectorOptio
         Repository repo,
         Commit mergeCommit,
         Branch targetBranch,
-        HashSet<string> targetCommitShas)
+        HashSet<string> targetCommitShas,
+        Tree targetTree)
     {
         // Quick check: if merge commit is already in target
         if (targetCommitShas.Contains(mergeCommit.Sha))
@@ -390,10 +390,7 @@ public class EmptyCommitDetector(string repositoryPath, EmptyCommitDetectorOptio
             };
         }
 
-        // Compare merge commit with its first parent (mainline)
-        var mainlineParent = mergeCommit.Parents.First();
-        var changes = repo.Diff.Compare<TreeChanges>(mainlineParent.Tree, mergeCommit.Tree);
-
+        var changes = repo.Diff.Compare<TreeChanges>(mergeCommit.Tree, targetTree);
         if (changes.Count == 0)
         {
             // This is a no-op merge (no actual changes)
@@ -407,12 +404,14 @@ public class EmptyCommitDetector(string repositoryPath, EmptyCommitDetectorOptio
 
         // Check if all merged changes already exist in target
         var allChangesInTarget = true;
+
+        var conflicts = new List<string>();
         foreach (var change in changes)
         {
             if (!IsChangeAlreadyInTarget(repo, change, mergeCommit, targetBranch.Tip))
             {
                 allChangesInTarget = false;
-                break;
+                conflicts.Add(change.Path);
             }
         }
 
@@ -427,6 +426,11 @@ public class EmptyCommitDetector(string repositoryPath, EmptyCommitDetectorOptio
         }
 
         return null;
+    }
+
+    private static bool IsValidFile(string changePath)
+    {
+        return !changePath.EndsWith("packages.lock.json");
     }
 
     private EmptyCommitInfo? CheckRootCommitEmpty(
@@ -468,6 +472,12 @@ public class EmptyCommitDetector(string repositoryPath, EmptyCommitDetectorOptio
     {
         try
         {
+            if (!IsValidFile(change.Path))
+            {
+                return true;
+            }
+            
+            
             switch (change.Status)
             {
                 case ChangeKind.Deleted:
@@ -676,7 +686,7 @@ public enum EmptyReason
 
 public class EmptyCommitDetectorOptions
 {
-    public bool IgnoreWhitespaceChanges { get; set; }
+    public bool IgnoreWhitespaceChanges { get; set; } = true;
     public bool ConsiderModeChanges { get; set; } = true;
     public bool UseParallelProcessing { get; set; } = true;
     public int MaxDegreeOfParallelism { get; set; } = 4;
@@ -715,6 +725,7 @@ public class DetectionProgress
     public int TotalCommits { get; set; }
     public string CurrentCommit { get; set; } = "";
     public double PercentComplete { get; set; }
+    public int EmptyCommits { get; set; }
 }
 
 public class EmptyCommitDetectionException : Exception

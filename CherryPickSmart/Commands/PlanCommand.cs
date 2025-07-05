@@ -65,7 +65,8 @@ public class PlanCommand : ICommand
             Dictionary<string, List<CpCommit>> ticketMap = null!;
             Dictionary<string, JiraClient.JiraTicket> ticketInfos = null!;
             List<OrphanCommitDetector.OrphanCommit> orphans = null!;
-
+            List<MergeCommitAnalyzer.MergeAnalysis> mergeAnalyses = [];
+            
             await AnsiConsole.Status()
                 .Spinner(Spinner.Known.Dots)
                 .SpinnerStyle(Style.Parse("green"))
@@ -77,6 +78,39 @@ public class PlanCommand : ICommand
                     graph = parser.ParseHistory(RepositoryPath, FromBranch, ToBranch);
                     targetCommits = parser.GetCommitsInBranch(RepositoryPath, ToBranch);
 
+                    var mergeAnalyzer = services.GetRequiredService<MergeCommitAnalyzer>();
+                    mergeAnalyses = mergeAnalyzer.AnalyzeMerges(graph, targetCommits);
+
+                    var selectedCommits = graph.Commits.Select(s => s.Value)
+                        .DistinctBy(d => d.ShortSha).ToList();
+                    foreach (var analysis in mergeAnalyses)
+                    {
+                        if (selectedCommits.Exists(x => x.Sha == analysis.MergeSha))
+                        {
+                            selectedCommits.RemoveAll(r => analysis.IntroducedCommits.Contains(r.Sha));
+                        }
+                    }
+
+                    var emptyDetector = new EmptyCommitDetector(RepositoryPath, new EmptyCommitDetectorOptions
+                    {
+                        UseParallelProcessing = selectedCommits.Count > 20, // Only use parallel for larger sets
+                        MaxDegreeOfParallelism = 4
+                    });
+
+                    var empties = await emptyDetector.DetectEmptyCommitsParallelAsync(selectedCommits, ToBranch,
+                        new Progress<DetectionProgress>(p =>
+                        {
+                            ctx.Status($"🔍 Detecting empty commits... {p.PercentComplete:F0}% ({p.ProcessedCommits}/{p.TotalCommits}) | Empty commits {p.EmptyCommits}");
+                        }));
+
+                    foreach (var empty in empties.EmptyCommits.Values)
+                    {
+                        if (graph.Commits.TryGetValue(empty.CommitSha, out var commit))
+                        {
+                            commit.IsEmpty = true;
+                        }
+                    }
+                    empties.DisplaySummary();
                     // Step 2: Extract Tickets
                     ctx.Status("🎫 Extracting tickets from commit messages...");
                     var ticketExtractor = services.GetRequiredService<TicketExtractor>();
@@ -97,7 +131,6 @@ public class PlanCommand : ICommand
                     {
                         ctx.Status($"🤖 Generating suggestions for {orphans.Count} orphan commits...");
 
-                        var mergeAnalyzer = new MergeCommitAnalyzer();
                         var analysis = mergeAnalyzer.AnalyzeMerges(graph, []);
 
                         foreach (var orphan in orphans)
@@ -124,7 +157,7 @@ public class PlanCommand : ICommand
                 AnsiConsole.WriteLine();
 
                 var promptService = services.GetRequiredService<InteractivePromptService>();
-                orphanAssignments = await promptService.ResolveOrphansAsync(orphans, AutoInfer);
+                //orphanAssignments = await promptService.ResolveOrphansAsync(orphans, AutoInfer);
             }
 
             // Select tickets
@@ -186,8 +219,6 @@ public class PlanCommand : ICommand
             // Optimize order
             AnsiConsole.WriteLine("🔧 Optimizing cherry-pick order...");
             var optimizer = services.GetRequiredService<OrderOptimizer>();
-            var mergeAnalyzer = services.GetRequiredService<MergeCommitAnalyzer>();
-            var mergeAnalyses = mergeAnalyzer.AnalyzeMerges(graph, targetCommits);
             var plan = optimizer.OptimizeOrder(selectedCommits, mergeAnalyses, conflicts, FromBranch);
 
             // Mark empty commits in the plan

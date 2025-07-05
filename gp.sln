@@ -4,6 +4,8 @@ VisualStudioVersion = 17.5.2.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CherryPickSmart", "CherryPickSmart\CherryPickSmart.csproj", "{ABA8DED4-F7CD-4876-1E42-5802FDD1BA3D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GitCherryHelper", "GitCherryHelper\GitCherryHelper.csproj", "{F60725F7-1457-43E6-85CE-26558599630F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -14,6 +16,10 @@ Global
 		{ABA8DED4-F7CD-4876-1E42-5802FDD1BA3D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{ABA8DED4-F7CD-4876-1E42-5802FDD1BA3D}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{ABA8DED4-F7CD-4876-1E42-5802FDD1BA3D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F60725F7-1457-43E6-85CE-26558599630F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F60725F7-1457-43E6-85CE-26558599630F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F60725F7-1457-43E6-85CE-26558599630F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F60725F7-1457-43E6-85CE-26558599630F}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

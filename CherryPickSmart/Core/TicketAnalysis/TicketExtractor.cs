@@ -129,6 +129,11 @@ public class TicketExtractor
 
         foreach (var (_, commit) in graph.Commits)
         {
+            if (commit.IsEmpty)
+            {
+                continue;
+            }
+            
             // Extract from commit message
             var messageTickets = ExtractTickets(commit.Message);
 
@@ -139,7 +144,7 @@ public class TicketExtractor
                 //: new List<string>();
 
             // Combine all tickets found
-            var allTickets = messageTickets.Concat(branchTickets).Distinct().ToList();
+            var allTickets = messageTickets.Distinct().ToList();
 
             foreach (var ticket in allTickets)
             {

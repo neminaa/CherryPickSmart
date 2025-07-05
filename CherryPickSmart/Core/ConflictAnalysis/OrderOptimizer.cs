@@ -17,7 +17,6 @@ public class OrderOptimizer
             var mergeCommitShas = merge.IntroducedCommits
                 .Where(sha => selectedCommits.Any(c => c.Sha == sha))
                 .ToList();
-
             if (mergeCommitShas.Count > 0)
             {
                 var desc = merge.Message

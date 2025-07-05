@@ -13,6 +13,7 @@ public record CpCommit
     public List<string> ModifiedFiles { get; init; } = [];
     public bool IsMergeCommit => ParentShas.Count > 1;
 
+    public bool IsEmpty { get; set; } 
     // Branch tracking
     public HashSet<string> ContainingBranches { get; set; } = [];
 

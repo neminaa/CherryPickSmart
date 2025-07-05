@@ -28,7 +28,7 @@ public class ConflictPredictorOptions
     /// <summary>
     /// Enable semantic conflict detection across related files
     /// </summary>
-    public bool EnableSemanticConflictDetection { get; set; } = true;
+    public bool EnableSemanticConflictDetection { get; set; } = false;
 
     /// <summary>
     /// Risk calculation options

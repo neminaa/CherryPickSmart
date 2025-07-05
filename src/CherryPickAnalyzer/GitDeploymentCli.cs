@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System;
+using System.Text.Json;
 using CliWrap;
 using CliWrap.Buffered;
 using GitCherryHelper.Models;
@@ -26,22 +27,46 @@ public class GitDeploymentCli : IDisposable
 
     public GitDeploymentCli(string repoPath)
     {
-        _repoPath = Path.GetFullPath(repoPath);
+        if (string.IsNullOrWhiteSpace(repoPath))
+            throw new ArgumentException("Repository path cannot be null or empty", nameof(repoPath));
+
+        try
+        {
+            _repoPath = Path.GetFullPath(repoPath);
+        }
+        catch (Exception ex)
+        {
+            throw new ArgumentException($"Invalid repository path: {repoPath}", nameof(repoPath), ex);
+        }
 
         if (!Repository.IsValid(_repoPath))
         {
             throw new InvalidOperationException($"'{_repoPath}' is not a valid git repository");
         }
 
-        _repo = new Repository(_repoPath);
-        _gitExecutor = new GitCommandExecutor(_repoPath);
-        _branchValidator = new BranchValidator(_repo);
-        _repoInfoDisplay = new RepositoryInfoDisplay(_repoPath, GetRepositoryStatus());
-        _analysisDisplay = new AnalysisDisplay();
+        try
+        {
+            _repo = new Repository(_repoPath);
+            _gitExecutor = new GitCommandExecutor(_repoPath);
+            _branchValidator = new BranchValidator(_repo);
+            _repoInfoDisplay = new RepositoryInfoDisplay(_repoPath, GetRepositoryStatus());
+            _analysisDisplay = new AnalysisDisplay();
+        }
+        catch (Exception ex)
+        {
+            _repo?.Dispose();
+            throw new InvalidOperationException($"Failed to initialize Git repository at '{_repoPath}': {ex.Message}", ex);
+        }
     }
 
     public async Task<int> AnalyzeAsync(AnalyzeOptions options)
     {
+        if (options == null)
+            throw new ArgumentNullException(nameof(options));
+
+        // Validate options
+        ValidateAnalyzeOptions(options);
+
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(options.TimeoutSeconds));
 
         try
@@ -99,6 +124,12 @@ public class GitDeploymentCli : IDisposable
 
     public async Task<int> CherryPickAsync(CherryPickOptions options)
     {
+        if (options == null)
+            throw new ArgumentNullException(nameof(options));
+
+        // Validate options
+        ValidateCherryPickOptions(options);
+
         try
         {
             AnsiConsole.Write(new FigletText("TSP GIT Analyzer")
@@ -223,6 +254,40 @@ public class GitDeploymentCli : IDisposable
         };
 
         return analysis;
+    }
+
+    private static void ValidateAnalyzeOptions(AnalyzeOptions options)
+    {
+        if (string.IsNullOrWhiteSpace(options.SourceBranch))
+            throw new ArgumentException("Source branch cannot be null or empty", nameof(options.SourceBranch));
+
+        if (string.IsNullOrWhiteSpace(options.TargetBranch))
+            throw new ArgumentException("Target branch cannot be null or empty", nameof(options.TargetBranch));
+
+        if (string.IsNullOrWhiteSpace(options.Remote))
+            throw new ArgumentException("Remote cannot be null or empty", nameof(options.Remote));
+
+        if (options.TimeoutSeconds <= 0)
+            throw new ArgumentException("Timeout must be greater than 0", nameof(options.TimeoutSeconds));
+
+        if (options.TimeoutSeconds > 3600) // 1 hour max
+            throw new ArgumentException("Timeout cannot exceed 1 hour", nameof(options.TimeoutSeconds));
+
+        var validFormats = new[] { "table", "json", "markdown" };
+        if (!validFormats.Contains(options.Format?.ToLower()))
+            throw new ArgumentException($"Invalid format. Valid formats are: {string.Join(", ", validFormats)}", nameof(options.Format));
+    }
+
+    private static void ValidateCherryPickOptions(CherryPickOptions options)
+    {
+        if (string.IsNullOrWhiteSpace(options.SourceBranch))
+            throw new ArgumentException("Source branch cannot be null or empty", nameof(options.SourceBranch));
+
+        if (string.IsNullOrWhiteSpace(options.TargetBranch))
+            throw new ArgumentException("Target branch cannot be null or empty", nameof(options.TargetBranch));
+
+        if (string.Equals(options.SourceBranch, options.TargetBranch, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Source and target branches cannot be the same");
     }
 
     public void Dispose()

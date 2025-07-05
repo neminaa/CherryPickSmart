@@ -202,25 +202,38 @@ public class GitDeploymentCli : IDisposable
         var tree = new Spectre.Console.Tree("📁 File Changes")
             .Style(Style.Parse("blue"));
 
-        // Precompute file-to-commits map for efficiency
+        // Precompute file-to-commits map for efficiency with progress display
         var fileToCommits = new Dictionary<string, List<CommitInfo>>();
-        foreach (var commitInfo in outstandingCommits)
-        {
-            var commit = _repo.Lookup<LibGit2Sharp.Commit>(commitInfo.Sha);
-            if (commit == null) continue;
-            var parent = commit.Parents.FirstOrDefault();
-            if (parent == null) continue;
-            var commitPatch = _repo.Diff.Compare<Patch>(parent.Tree, commit.Tree);
-            foreach (var entry in commitPatch)
+        await AnsiConsole.Progress()
+            .StartAsync(async ctx =>
             {
-                if (!fileToCommits.TryGetValue(entry.Path, out var list))
+                var commitTask = ctx.AddTask("[blue]Analyzing commits...[/]");
+                int totalCommits = outstandingCommits.Count;
+                int processed = 0;
+                foreach (var commitInfo in outstandingCommits)
                 {
-                    list = new List<CommitInfo>();
-                    fileToCommits[entry.Path] = list;
+                    var commit = _repo.Lookup<LibGit2Sharp.Commit>(commitInfo.Sha);
+                    if (commit == null) { processed++; commitTask.Value = processed * 100.0 / totalCommits; continue; }
+                    var parent = commit.Parents.FirstOrDefault();
+                    if (parent == null) { processed++; commitTask.Value = processed * 100.0 / totalCommits; continue; }
+                    var commitPatch = _repo.Diff.Compare<Patch>(parent.Tree, commit.Tree);
+                    foreach (var entry in commitPatch)
+                    {
+                        if (!fileToCommits.TryGetValue(entry.Path, out var list))
+                        {
+                            list = new List<CommitInfo>();
+                            fileToCommits[entry.Path] = list;
+                        }
+                        list.Add(commitInfo);
+                        // Show live progress for each file being mapped
+                        var shortPath = entry.Path.Length > 50 ? "..." + entry.Path[^47..] : entry.Path;
+                        commitTask.Description = $"[blue]Mapping:[/] {Markup.Escape(shortPath)} ([dim]{Markup.Escape(commitInfo.ShortSha)}[/] {Markup.Escape(commitInfo.Author)})";
+                        ctx.Refresh();
+                    }
+                    processed++;
+                    commitTask.Value = processed * 100.0 / totalCommits;
                 }
-                list.Add(commitInfo);
-            }
-        }
+            });
 
         await AnsiConsole.Live(tree)
             .StartAsync(async ctx =>

@@ -247,12 +247,12 @@ public class GitDeploymentCli : IDisposable
                     };
 
                     var changeText = $"[green]+{fileChange.LinesAdded}[/] [red]-{fileChange.LinesDeleted}[/]";
-                    var fileNode = new Spectre.Console.TreeNode(new Markup($"{statusIcon} {fileChange.NewPath} {changeText}"));
+                    var fileNode = new Spectre.Console.TreeNode(new Markup($"{statusIcon} {Markup.Escape(fileChange.NewPath)} {changeText}"));
 
                     // Add commit sub-nodes
                     foreach (var commit in fileChange.Commits)
                     {
-                        var commitText = $"[dim]{commit.ShortSha}[/] [blue]{commit.Author}[/]: {commit.Message} [grey]({commit.Date:yyyy-MM-dd})[/]";
+                        var commitText = $"[dim]{Markup.Escape(commit.ShortSha)}[/] [blue]{Markup.Escape(commit.Author)}[/]: {Markup.Escape(commit.Message)} [grey]({commit.Date:yyyy-MM-dd})[/]";
                         fileNode.AddNode(new Spectre.Console.TreeNode(new Markup(commitText)));
                     }
 
@@ -276,9 +276,32 @@ public class GitDeploymentCli : IDisposable
 
     private void AddFileToTree(Spectre.Console.Tree tree, string filePath, Spectre.Console.TreeNode fileNode)
     {
-        // For now, just add files directly to the root tree
-        // A more complex hierarchical structure can be implemented later
-        tree.AddNode(fileNode);
+        var pathParts = filePath.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+        object currentLevel = tree;
+        Spectre.Console.TreeNode currentNode = null;
+
+        // Traverse or create folder nodes
+        for (int i = 0; i < pathParts.Length - 1; i++)
+        {
+            var part = Markup.Escape(pathParts[i]);
+            var nodes = currentLevel is Spectre.Console.Tree t ? t.Nodes : ((Spectre.Console.TreeNode)currentLevel).Nodes;
+            var existing = nodes.FirstOrDefault(n => n.ToString().Contains(part));
+            if (existing == null)
+            {
+                var dirNode = new Spectre.Console.TreeNode(new Markup($"[blue]📁 {part}[/]"));
+                nodes.Add(dirNode);
+                currentNode = dirNode;
+            }
+            else
+            {
+                currentNode = existing;
+            }
+            currentLevel = currentNode;
+        }
+
+        // Add the file node to the correct folder
+        var fileParentNodes = currentLevel is Spectre.Console.Tree t2 ? t2.Nodes : ((Spectre.Console.TreeNode)currentLevel).Nodes;
+        fileParentNodes.Add(fileNode);
     }
 
     public void Dispose()

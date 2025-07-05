@@ -6,6 +6,7 @@ using LibGit2Sharp;
 using Spectre.Console;
 using CherryPickOptions = CherryPickAnalyzer.Options.CherryPickOptions;
 using RepositoryStatus = CherryPickAnalyzer.Models.RepositoryStatus;
+using System.IO;
 
 namespace CherryPickAnalyzer.Core;
 
@@ -201,6 +202,26 @@ public class GitDeploymentCli : IDisposable
         var tree = new Spectre.Console.Tree("📁 File Changes")
             .Style(Style.Parse("blue"));
 
+        // Precompute file-to-commits map for efficiency
+        var fileToCommits = new Dictionary<string, List<CommitInfo>>();
+        foreach (var commitInfo in outstandingCommits)
+        {
+            var commit = _repo.Lookup<LibGit2Sharp.Commit>(commitInfo.Sha);
+            if (commit == null) continue;
+            var parent = commit.Parents.FirstOrDefault();
+            if (parent == null) continue;
+            var commitPatch = _repo.Diff.Compare<Patch>(parent.Tree, commit.Tree);
+            foreach (var entry in commitPatch)
+            {
+                if (!fileToCommits.TryGetValue(entry.Path, out var list))
+                {
+                    list = new List<CommitInfo>();
+                    fileToCommits[entry.Path] = list;
+                }
+                list.Add(commitInfo);
+            }
+        }
+
         await AnsiConsole.Live(tree)
             .StartAsync(async ctx =>
             {
@@ -213,24 +234,9 @@ public class GitDeploymentCli : IDisposable
                         NewPath = change.Path,
                         Status = change.Status.ToString(),
                         LinesAdded = change.LinesAdded,
-                        LinesDeleted = change.LinesDeleted
+                        LinesDeleted = change.LinesDeleted,
+                        Commits = fileToCommits.TryGetValue(change.Path, out var commits) ? commits : new List<CommitInfo>()
                     };
-
-                    // Find all relevant commits for this file
-                    var relevantCommits = outstandingCommits
-                        .Where(c =>
-                        {
-                            // Use git log to check if this commit touches the file
-                            // We'll check if the file is in the commit's diff
-                            var commit = _repo.Lookup<LibGit2Sharp.Commit>(c.Sha);
-                            if (commit == null) return false;
-                            var parent = commit.Parents.FirstOrDefault();
-                            if (parent == null) return false;
-                            var commitPatch = _repo.Diff.Compare<Patch>(parent.Tree, commit.Tree);
-                            return commitPatch.Any(p => p.Path == change.Path);
-                        })
-                        .ToList();
-                    fileChange.Commits = relevantCommits;
 
                     analysis.ChangedFiles.Add(fileChange);
                     totalAdded += change.LinesAdded;
@@ -246,13 +252,17 @@ public class GitDeploymentCli : IDisposable
                         _ => "[dim]❓[/]"
                     };
 
+                    var fileName = Path.GetFileName(fileChange.NewPath);
+                    var commitCountBadge = fileChange.Commits.Count > 1 ? $" [grey][{fileChange.Commits.Count} commits][/grey]" : string.Empty;
                     var changeText = $"[green]+{fileChange.LinesAdded}[/] [red]-{fileChange.LinesDeleted}[/]";
-                    var fileNode = new Spectre.Console.TreeNode(new Markup($"{statusIcon} {Markup.Escape(fileChange.NewPath)} {changeText}"));
+                    var fileNode = new Spectre.Console.TreeNode(new Markup($"{statusIcon} {Markup.Escape(fileName)}{commitCountBadge} {changeText}"));
 
                     // Add commit sub-nodes
                     foreach (var commit in fileChange.Commits)
                     {
-                        var commitText = $"[dim]{Markup.Escape(commit.ShortSha)}[/] [blue]{Markup.Escape(commit.Author)}[/]: {Markup.Escape(commit.Message)} [grey]({commit.Date:yyyy-MM-dd})[/]";
+                        var isRecent = (DateTimeOffset.UtcNow - commit.Date).TotalDays <= 7;
+                        var commitColor = isRecent ? "bold yellow" : "dim";
+                        var commitText = $"[{commitColor}]{Markup.Escape(commit.ShortSha)}[/] [blue]{Markup.Escape(commit.Author)}[/]: {Markup.Escape(commit.Message)} [grey]({commit.Date:yyyy-MM-dd})[/]";
                         fileNode.AddNode(new Spectre.Console.TreeNode(new Markup(commitText)));
                     }
 
@@ -289,6 +299,8 @@ public class GitDeploymentCli : IDisposable
             if (existing == null)
             {
                 var dirNode = new Spectre.Console.TreeNode(new Markup($"[blue]📁 {part}[/]"));
+                // Collapse folders with more than 5 children by default
+                if (nodes.Count > 5) dirNode.Collapse();
                 nodes.Add(dirNode);
                 currentNode = dirNode;
             }

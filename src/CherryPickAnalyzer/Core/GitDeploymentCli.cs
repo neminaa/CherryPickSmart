@@ -45,15 +45,7 @@ public class GitDeploymentCli : IDisposable
             "yarn.lock",
             "pnpm-lock.yaml"
         };
-        HashSet<string> excludeFiles;
-        if (options.ExcludeFiles != null && options.ExcludeFiles.Any())
-        {
-            excludeFiles = new HashSet<string>(options.ExcludeFiles, StringComparer.OrdinalIgnoreCase);
-        }
-        else
-        {
-            excludeFiles = new HashSet<string>(defaultExcludes, StringComparer.OrdinalIgnoreCase);
-        }
+        var excludeFiles = options.ExcludeFiles.Any() ? new HashSet<string>(options.ExcludeFiles, StringComparer.OrdinalIgnoreCase) : new HashSet<string>(defaultExcludes, StringComparer.OrdinalIgnoreCase);
 
         try
         {

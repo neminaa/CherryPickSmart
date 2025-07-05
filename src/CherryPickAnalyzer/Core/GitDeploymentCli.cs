@@ -196,14 +196,11 @@ public class GitDeploymentCli : IDisposable
         var analysis = new ContentAnalysis { ChangedFiles = new List<FileChange>() };
         int totalAdded = 0, totalDeleted = 0;
 
-        // Create live table for real-time file change display
-        var liveTable = new Table()
-            .AddColumn("Status")
-            .AddColumn("File")
-            .AddColumn("Changes")
-            .BorderColor(Color.Yellow);
+        // Create tree for hierarchical file change display
+        var tree = new Spectre.Console.Tree("📁 File Changes")
+            .Style(Style.Parse("blue"));
 
-        await AnsiConsole.Live(liveTable)
+        await AnsiConsole.Live(tree)
             .StartAsync(async ctx =>
             {
                 foreach (var change in patch)
@@ -222,7 +219,7 @@ public class GitDeploymentCli : IDisposable
                     totalAdded += change.LinesAdded;
                     totalDeleted += change.LinesDeleted;
 
-                    // Add row to live table with status icon
+                    // Create file node with status icon and change details
                     var statusIcon = fileChange.Status switch
                     {
                         "Added" => "[green]➕[/]",
@@ -232,11 +229,12 @@ public class GitDeploymentCli : IDisposable
                         _ => "[dim]❓[/]"
                     };
 
-                    liveTable.AddRow(
-                        statusIcon,
-                        fileChange.NewPath,
-                        $"[green]+{fileChange.LinesAdded}[/] [red]-{fileChange.LinesDeleted}[/]"
-                    );
+                    var changeText = $"[green]+{fileChange.LinesAdded}[/] [red]-{fileChange.LinesDeleted}[/]";
+                    var fileNode = new Spectre.Console.TreeNode(new Markup($"{statusIcon} {fileChange.NewPath}"))
+                        .AddNode(new Spectre.Console.TreeNode(new Markup($"[dim]Changes: {changeText}[/]")));
+
+                    // Add to tree based on file path structure
+                    AddFileToTree(tree, fileChange.NewPath, fileNode);
 
                     ctx.Refresh();
                     await Task.Delay(10, cancellationToken); // Small delay for visual effect
@@ -251,6 +249,13 @@ public class GitDeploymentCli : IDisposable
         };
 
         return analysis;
+    }
+
+    private void AddFileToTree(Spectre.Console.Tree tree, string filePath, Spectre.Console.TreeNode fileNode)
+    {
+        // For now, just add files directly to the root tree
+        // A more complex hierarchical structure can be implemented later
+        tree.AddNode(fileNode);
     }
 
     public void Dispose()

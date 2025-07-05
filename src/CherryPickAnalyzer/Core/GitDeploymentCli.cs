@@ -178,7 +178,7 @@ public class GitDeploymentCli : IDisposable
 
         if (analysis.HasContentDifferences)
         {
-            analysis.ContentAnalysis = await GetDetailedContentAnalysisAsync(sourceBranch, targetBranch, cancellationToken);
+            analysis.ContentAnalysis = await GetDetailedContentAnalysisAsync(sourceBranch, targetBranch, analysis.OutstandingCommits, cancellationToken);
         }
 
         return analysis;
@@ -187,6 +187,7 @@ public class GitDeploymentCli : IDisposable
     private async Task<ContentAnalysis> GetDetailedContentAnalysisAsync(
         string sourceBranch, 
         string targetBranch,
+        List<CommitInfo> outstandingCommits,
         CancellationToken cancellationToken = default)
     {
         var source = _branchValidator.GetBranch(sourceBranch);
@@ -215,6 +216,22 @@ public class GitDeploymentCli : IDisposable
                         LinesDeleted = change.LinesDeleted
                     };
 
+                    // Find all relevant commits for this file
+                    var relevantCommits = outstandingCommits
+                        .Where(c =>
+                        {
+                            // Use git log to check if this commit touches the file
+                            // We'll check if the file is in the commit's diff
+                            var commit = _repo.Lookup<LibGit2Sharp.Commit>(c.Sha);
+                            if (commit == null) return false;
+                            var parent = commit.Parents.FirstOrDefault();
+                            if (parent == null) return false;
+                            var commitPatch = _repo.Diff.Compare<Patch>(parent.Tree, commit.Tree);
+                            return commitPatch.Any(p => p.Path == change.Path);
+                        })
+                        .ToList();
+                    fileChange.Commits = relevantCommits;
+
                     analysis.ChangedFiles.Add(fileChange);
                     totalAdded += change.LinesAdded;
                     totalDeleted += change.LinesDeleted;
@@ -230,10 +247,16 @@ public class GitDeploymentCli : IDisposable
                     };
 
                     var changeText = $"[green]+{fileChange.LinesAdded}[/] [red]-{fileChange.LinesDeleted}[/]";
-                    var fileNode = new Spectre.Console.TreeNode(new Markup($"{statusIcon} {fileChange.NewPath}"))
-                        .AddNode(new Spectre.Console.TreeNode(new Markup($"[dim]Changes: {changeText}[/]")));
+                    var fileNode = new Spectre.Console.TreeNode(new Markup($"{statusIcon} {fileChange.NewPath} {changeText}"));
 
-                    // Add to tree based on file path structure
+                    // Add commit sub-nodes
+                    foreach (var commit in fileChange.Commits)
+                    {
+                        var commitText = $"[dim]{commit.ShortSha}[/] [blue]{commit.Author}[/]: {commit.Message} [grey]({commit.Date:yyyy-MM-dd})[/]";
+                        fileNode.AddNode(new Spectre.Console.TreeNode(new Markup(commitText)));
+                    }
+
+                    // Add to tree based on file path structure (for now, just add to root)
                     AddFileToTree(tree, fileChange.NewPath, fileNode);
 
                     ctx.Refresh();

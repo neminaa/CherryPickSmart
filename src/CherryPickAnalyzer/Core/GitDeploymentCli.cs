@@ -384,8 +384,9 @@ public class GitDeploymentCli : IDisposable
                         {
                             commitColor = "bold magenta";
                             cherryIcon = "🍒 ";
+                            
                         }
-                        else if (isCherryPickCommit)
+                        else if (isCherryPickCommit && !isCoveredByMerge)
                         {
                             commitColor = "bold magenta";
                             cherryIcon = "🍒 ";
@@ -405,7 +406,23 @@ public class GitDeploymentCli : IDisposable
                             commitColor = "dim";
                         }
                         var commitText = $"[{commitColor}]{cherryIcon}{Markup.Escape(commit.ShortSha)}[/] [blue]{Markup.Escape(commit.Author)}[/]: {Markup.Escape(commit.Message)} [grey]({commit.Date:yyyy-MM-dd})[/]";
-                        fileNode.AddNode(new TreeNode(new Markup(commitText)));
+                        
+                        
+                        var subNode = fileNode.AddNode(new TreeNode(new Markup(commitText)));
+
+                        if (isMergeWithCherry)
+                        {
+                            // Add sub-nodes for each included cherry-pick commit
+                            foreach (var cherrySha in mergeToCherryPicks[commit.Sha])
+                            {
+                                var cherryCommit = fileChange.Commits.FirstOrDefault(c => c.Sha == cherrySha);
+                                if (cherryCommit == null) continue;
+                                var cherryText =
+                                    $"[dim cyan] {Markup.Escape(cherryCommit.ShortSha)}[/] [blue]{Markup.Escape(cherryCommit.Author)}[/]: {Markup.Escape(cherryCommit.Message)} [grey]({cherryCommit.Date:yyyy-MM-dd})[/]";
+                                subNode.AddNode(new TreeNode(new Markup(cherryText)));
+                            }
+                        }
+
                     }
 
                     // Add to tree based on file path structure (for now, just add to root)

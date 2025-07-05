@@ -392,8 +392,8 @@ public class GitDeploymentCli : IDisposable
                         }
                         else if (isCherryPickCommit)
                         {
-                            commitColor = "bold magenta";
-                            cherryIcon = "🍒 ";
+                            commitColor = "bold cyan";
+                            cherryIcon = "🌟 ";
                         }
                         else if (isRecent)
                         {

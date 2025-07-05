@@ -362,6 +362,9 @@ public class GitDeploymentCli : IDisposable
         var tree = new Spectre.Console.Tree("📁 File Changes")
             .Style(Style.Parse("blue"));
 
+        // Directory node cache for clean tree structure
+        var dirNodeCache = new Dictionary<string, TreeNode>(StringComparer.OrdinalIgnoreCase);
+
         await AnsiConsole.Live(tree)
             .AutoClear(true)
             .StartAsync(async ctx =>
@@ -461,7 +464,7 @@ public class GitDeploymentCli : IDisposable
                     }
 
                     // Add to tree based on file path structure (for now, just add to root)
-                    AddFileToTree(tree, fileChange.NewPath, fileNode);
+                    AddFileToTree(tree, fileChange.NewPath, fileNode, dirNodeCache);
 
                     ctx.Refresh();
                     await Task.Delay(10, cancellationToken); // Small delay for visual effect
@@ -480,34 +483,23 @@ public class GitDeploymentCli : IDisposable
         return analysis;
     }
 
-    private static void AddFileToTree(Spectre.Console.Tree tree, string filePath, TreeNode fileNode)
+    private static void AddFileToTree(Spectre.Console.Tree tree, string filePath, TreeNode fileNode, Dictionary<string, TreeNode> dirNodes)
     {
-        var pathParts = filePath.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
+        var pathParts = filePath.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
         object currentLevel = tree;
-
-        // Traverse or create folder nodes
-        for (var i = 0; i < pathParts.Length - 1; i++)
+        string currentPath = "";
+        for (int i = 0; i < pathParts.Length - 1; i++)
         {
-            var part = Markup.Escape(pathParts[i]);
-            var nodes = currentLevel is Spectre.Console.Tree t ? t.Nodes : ((TreeNode)currentLevel).Nodes;
-            var existing = nodes.FirstOrDefault(n => n.ToString()!.Contains(part));
-            TreeNode currentNode;
-            if (existing == null)
+            currentPath = Path.Combine(currentPath, pathParts[i]);
+            if (!dirNodes.TryGetValue(currentPath, out var dirNode))
             {
-                var dirNode = new TreeNode(new Markup($"[blue]📁 {part}[/]"));
-                // Collapse folders with more than 5 children by default
-                //if (nodes.Count > 5) dirNode.Collapse();
-                nodes.Add(dirNode);
-                currentNode = dirNode;
+                dirNode = new TreeNode(new Markup($"[blue]📁 {Markup.Escape(pathParts[i])}[/]"));
+                var parentNodes = currentLevel is Spectre.Console.Tree t ? t.Nodes : ((TreeNode)currentLevel).Nodes;
+                parentNodes.Add(dirNode);
+                dirNodes[currentPath] = dirNode;
             }
-            else
-            {
-                currentNode = existing;
-            }
-            currentLevel = currentNode;
+            currentLevel = dirNode;
         }
-
-        // Add the file node to the correct folder
         var fileParentNodes = currentLevel is Spectre.Console.Tree t2 ? t2.Nodes : ((TreeNode)currentLevel).Nodes;
         fileParentNodes.Add(fileNode);
     }

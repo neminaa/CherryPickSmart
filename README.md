@@ -162,16 +162,7 @@ dotnet format
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
-
-## License
-
-[Add your license information here]
-
-## Support
-
-For issues and questions, please [create an issue](link-to-issues) in the repository.
+1. Create a feature branch
+2. Make your changes
+3. Add tests if applicable
+4. Submit a pull request

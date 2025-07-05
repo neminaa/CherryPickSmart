@@ -1,4 +1,5 @@
 ﻿using CommandLine;
+using System.Collections.Generic;
 
 namespace CherryPickAnalyzer.Options;
 
@@ -31,4 +32,7 @@ public class AnalyzeOptions
 
     [Option("merge-highlight-mode", Required = false, HelpText = "How to highlight merge commits: ancestry (default) or message.", Default = "ancestry")]
     public string MergeHighlightMode { get; set; } = "ancestry";
+
+    [Option("exclude-file", Required = false, HelpText = "File name to exclude from analysis. Can be specified multiple times.")]
+    public IEnumerable<string> ExcludeFiles { get; set; } = new List<string>();
 }

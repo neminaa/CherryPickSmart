@@ -37,6 +37,24 @@ public class GitDeploymentCli : IDisposable
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(options.TimeoutSeconds));
 
+        // Default excludes
+        var defaultExcludes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "packages.lock.json",
+            "package-lock.json",
+            "yarn.lock",
+            "pnpm-lock.yaml"
+        };
+        HashSet<string> excludeFiles;
+        if (options.ExcludeFiles != null && options.ExcludeFiles.Any())
+        {
+            excludeFiles = new HashSet<string>(options.ExcludeFiles, StringComparer.OrdinalIgnoreCase);
+        }
+        else
+        {
+            excludeFiles = new HashSet<string>(defaultExcludes, StringComparer.OrdinalIgnoreCase);
+        }
+
         try
         {
             AnsiConsole.Write(new FigletText("TSP GIT Analyzer")
@@ -53,7 +71,7 @@ public class GitDeploymentCli : IDisposable
 
             _branchValidator.ValidateBranches(options.SourceBranch, options.TargetBranch);
 
-            var analysis = await AnalyzeWithProgressAsync(options.SourceBranch, options.TargetBranch, "ancestry", cts.Token);
+            var analysis = await AnalyzeWithProgressAsync(options.SourceBranch, options.TargetBranch, options.MergeHighlightMode, excludeFiles, cts.Token);
 
             switch (options.Format.ToLower())
             {
@@ -100,7 +118,17 @@ public class GitDeploymentCli : IDisposable
 
             _branchValidator.ValidateBranches(options.SourceBranch, options.TargetBranch);
 
-            var analysis = await AnalyzeWithProgressAsync(options.SourceBranch, options.TargetBranch, "ancestry");
+            // Default excludes
+            var defaultExcludes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "packages.lock.json",
+                "package-lock.json",
+                "yarn.lock",
+                "pnpm-lock.yaml"
+            };
+            var excludeFiles = new HashSet<string>(defaultExcludes, StringComparer.OrdinalIgnoreCase);
+
+            var analysis = await AnalyzeWithProgressAsync(options.SourceBranch, options.TargetBranch, "ancestry", excludeFiles, CancellationToken.None);
 
             if (analysis.CherryPickAnalysis.NewCommits.Count == 0)
             {
@@ -155,6 +183,7 @@ public class GitDeploymentCli : IDisposable
         string sourceBranch,
         string targetBranch,
         string mergeHighlightMode,
+        HashSet<string> excludeFiles,
         CancellationToken cancellationToken = default)
     {
         var analysis = new DeploymentAnalysis();
@@ -180,7 +209,7 @@ public class GitDeploymentCli : IDisposable
         if (analysis.HasContentDifferences)
         {
             analysis.ContentAnalysis = await GetDetailedContentAnalysisAsync(
-                sourceBranch, targetBranch, analysis.OutstandingCommits, analysis.CherryPickAnalysis.NewCommits, mergeHighlightMode, cancellationToken);
+                sourceBranch, targetBranch, analysis.OutstandingCommits, analysis.CherryPickAnalysis.NewCommits, mergeHighlightMode, excludeFiles, cancellationToken);
         }
 
         return analysis;
@@ -192,6 +221,7 @@ public class GitDeploymentCli : IDisposable
         List<CommitInfo> outstandingCommits,
         List<CommitInfo> newCherryPickCommits,
         string mergeHighlightMode,
+        HashSet<string> excludeFiles,
         CancellationToken cancellationToken = default)
     {
         var source = _branchValidator.GetBranch(sourceBranch);
@@ -343,6 +373,10 @@ public class GitDeploymentCli : IDisposable
                 {
                     if (cancellationToken.IsCancellationRequested) break;
                     
+                    var fileName = Path.GetFileName(change.Path);
+                    if (excludeFiles.Contains(fileName))
+                        continue;
+
                     var fileChange = new FileChange
                     {
                         NewPath = change.Path,
@@ -366,7 +400,6 @@ public class GitDeploymentCli : IDisposable
                         _ => "[dim]❓[/]"
                     };
 
-                    var fileName = Path.GetFileName(fileChange.NewPath);
                     var commitCountBadge = fileChange.Commits.Count > 1 ? $" [grey]{fileChange.Commits.Count} commits[/]" : string.Empty;
                     var changeText = $"[green]+{fileChange.LinesAdded}[/] [red]-{fileChange.LinesDeleted}[/]";
                     var fileNode = new TreeNode(new Markup($"{statusIcon} {Markup.Escape(fileName)}{commitCountBadge} {changeText}"));

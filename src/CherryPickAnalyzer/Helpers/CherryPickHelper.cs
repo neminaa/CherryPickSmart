@@ -3,6 +3,10 @@ using Spectre.Console;
 using System.Text.RegularExpressions;
 using LibGit2Sharp;
 using FuzzySharp;
+using System.Text.Json;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Text;
 
 namespace CherryPickAnalyzer.Helpers;
 
@@ -44,7 +48,8 @@ public static class CherryPickHelper
     }
 
     /// <summary>
-    /// Extracts ticket numbers from commit messages using various HSAMED formats
+    /// Extracts ticket numbers from commit messages using various HSAMED formats.
+    /// Use this method to get all ticket keys for Jira lookups.
     /// </summary>
     /// <param name="message">The commit message to extract tickets from</param>
     /// <returns>List of unique ticket numbers found in the message</returns>
@@ -374,5 +379,166 @@ public static class CherryPickHelper
             }
         }
         return ticketToMrs;
+    }
+
+    public class JiraConfig
+    {
+        public string JiraBaseUrl { get; set; } = "";
+        public string JiraUsername { get; set; } = "";
+        public string JiraApiToken { get; set; } = "";
+        public string JiraDefaultProject { get; set; } = "";
+    }
+
+    public class JiraTicketInfo
+    {
+        public string Key { get; set; } = "";
+        public string Status { get; set; } = "";
+        public string Summary { get; set; } = "";
+    }
+
+    public static JiraConfig LoadJiraConfig()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var configPath = Path.Combine(home, ".cherrypickanalyzer", "jira.json");
+        if (!File.Exists(configPath))
+            throw new FileNotFoundException($"Jira config not found at {configPath}");
+        var json = File.ReadAllText(configPath);
+        return JsonSerializer.Deserialize<JiraConfig>(json) ?? new JiraConfig();
+    }
+
+    public static JiraConfig LoadOrCreateJiraConfig()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var configDir = Path.Combine(home, ".cherrypickanalyzer");
+        var configPath = Path.Combine(configDir, "jira.json");
+        
+        if (File.Exists(configPath))
+        {
+            var json = File.ReadAllText(configPath);
+            return JsonSerializer.Deserialize<JiraConfig>(json) ?? new JiraConfig();
+        }
+        
+        // Prompt user for config
+        return PromptForJiraConfig(configDir, configPath);
+    }
+
+    private static JiraConfig PromptForJiraConfig(string configDir, string configPath)
+    {
+        Console.WriteLine("Jira configuration not found. Please provide your Jira credentials:");
+        Console.WriteLine();
+        
+        Console.Write("Jira Base URL (e.g., https://yourcompany.atlassian.net): ");
+        var baseUrl = Console.ReadLine()?.Trim();
+        if (string.IsNullOrEmpty(baseUrl))
+            throw new InvalidOperationException("Jira Base URL is required");
+        
+        Console.Write("Jira Username (email): ");
+        var username = Console.ReadLine()?.Trim();
+        if (string.IsNullOrEmpty(username))
+            throw new InvalidOperationException("Jira Username is required");
+        
+        Console.Write("Jira API Token: ");
+        var apiToken = ReadPassword();
+        if (string.IsNullOrEmpty(apiToken))
+            throw new InvalidOperationException("Jira API Token is required");
+        
+        Console.Write("Default Jira Project Key (e.g., HSAMED): ");
+        var defaultProject = Console.ReadLine()?.Trim() ?? "";
+        
+        var config = new JiraConfig
+        {
+            JiraBaseUrl = baseUrl,
+            JiraUsername = username,
+            JiraApiToken = apiToken,
+            JiraDefaultProject = defaultProject
+        };
+        
+        // Save config
+        Directory.CreateDirectory(configDir);
+        var json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
+        File.WriteAllText(configPath, json);
+        
+        Console.WriteLine($"Configuration saved to {configPath}");
+        return config;
+    }
+
+    private static string ReadPassword()
+    {
+        var password = new StringBuilder();
+        while (true)
+        {
+            var key = Console.ReadKey(true);
+            if (key.Key == ConsoleKey.Enter)
+                break;
+            if (key.Key == ConsoleKey.Backspace && password.Length > 0)
+                password.Length--;
+            else if (!char.IsControl(key.KeyChar))
+                password.Append(key.KeyChar);
+        }
+        Console.WriteLine();
+        return password.ToString();
+    }
+
+    public static async Task<JiraTicketInfo?> FetchJiraTicketAsync(string ticketKey, JiraConfig config)
+    {
+        using var client = new HttpClient();
+        var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{config.JiraUsername}:{config.JiraApiToken}"));
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
+        var url = $"{config.JiraBaseUrl}/rest/api/2/issue/{ticketKey}";
+        var response = await client.GetAsync(url);
+        if (!response.IsSuccessStatusCode) return null;
+        var json = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(json);
+        var fields = doc.RootElement.GetProperty("fields");
+        return new JiraTicketInfo
+        {
+            Key = ticketKey,
+            Status = fields.GetProperty("status").GetProperty("name").GetString() ?? "",
+            Summary = fields.GetProperty("summary").GetString() ?? ""
+        };
+    }
+
+    public static async Task<Dictionary<string, JiraTicketInfo>> FetchJiraTicketsBulkAsync(List<string> ticketKeys, JiraConfig config)
+    {
+        if (!ticketKeys.Any()) return new Dictionary<string, JiraTicketInfo>();
+        
+        using var client = new HttpClient();
+        var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{config.JiraUsername}:{config.JiraApiToken}"));
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
+        
+        var result = new Dictionary<string, JiraTicketInfo>();
+        const int batchSize = 50;
+        
+        // Process tickets in batches of 50
+        for (int i = 0; i < ticketKeys.Count; i += batchSize)
+        {
+            var batch = ticketKeys.Skip(i).Take(batchSize).ToList();
+            
+            // Build JQL query for bulk search
+            var jql = $"key IN ({string.Join(",", batch.Select(k => $"\"{k}\""))})";
+            var url = $"{config.JiraBaseUrl}/rest/api/2/search?jql={Uri.EscapeDataString(jql)}&fields=key,status,summary&maxResults={batchSize}";
+            
+            var response = await client.GetAsync(url);
+            if (!response.IsSuccessStatusCode) continue;
+            
+            var json = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(json);
+            var issues = doc.RootElement.GetProperty("issues");
+            
+            foreach (var issue in issues.EnumerateArray())
+            {
+                var key = issue.GetProperty("key").GetString() ?? "";
+                var fields = issue.GetProperty("fields");
+                var ticketInfo = new JiraTicketInfo
+                {
+                    Key = key,
+                    Status = fields.GetProperty("status").GetProperty("name").GetString() ?? "",
+                    Summary = fields.GetProperty("summary").GetString() ?? ""
+                };
+                result[key] = ticketInfo;
+            }
+        }
+        
+        return result;
     }
 }

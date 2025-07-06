@@ -68,6 +68,39 @@ public class GitDeploymentCli : IDisposable
 
             var analysis = await AnalyzeWithProgressAsync(options.SourceBranch, options.TargetBranch, options.MergeHighlightMode, excludeFiles, options.ShowAllCommits, cts.Token);
 
+            // --- JIRA integration: fetch ticket info if Jira project is set ---
+            if (!string.IsNullOrWhiteSpace(options.JiraDefaultProject))
+            {
+                try
+                {
+                    var jiraConfig = CherryPickHelper.LoadOrCreateJiraConfig();
+                    if (!string.IsNullOrWhiteSpace(options.JiraDefaultProject))
+                        jiraConfig.JiraDefaultProject = options.JiraDefaultProject;
+                    // Collect all unique ticket numbers from analysis (proof of concept: just from outstanding commits)
+                    var tickets = analysis.OutstandingCommits
+                        .SelectMany(c => CherryPickHelper.ExtractTicketNumbers(c.Message))
+                        .Distinct()
+                        .ToList();
+                    // Bulk fetch all tickets at once
+                    var ticketInfos = await CherryPickHelper.FetchJiraTicketsBulkAsync(tickets, jiraConfig);
+                    foreach (var ticket in tickets)
+                    {
+                        if (ticketInfos.TryGetValue(ticket, out var info))
+                        {
+                            AnsiConsole.MarkupLine($"[blue]Jira: {info.Key}[/] [green]{info.Status}[/] - {info.Summary}");
+                        }
+                        else
+                        {
+                            AnsiConsole.MarkupLine($"[red]Jira: {ticket} not found or error[/]");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AnsiConsole.MarkupLine($"[red]Jira config error: {ex.Message}[/]");
+                }
+            }
+
             switch (options.Format.ToLower())
             {
                 case "table":

@@ -38,4 +38,7 @@ public class AnalyzeOptions
 
     [Option("show-all-commits", Required = false, HelpText = "Show all commits in the file tree (default: false).")]
     public bool ShowAllCommits { get; set; } = false;
+
+    [Option("jira-project", Required = true, HelpText = "Jira project key (e.g., HSAMED). Overrides config file if set.")]
+    public string JiraDefaultProject { get; set; } = "";
 }

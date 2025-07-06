@@ -24,14 +24,14 @@ public class AnalyzeOptions
     public int TimeoutSeconds { get; set; } = 300;
 
     [Option("exclude-file", Required = false, HelpText = "File name to exclude from analysis. Can be specified multiple times.")]
-    public List<string> ExcludeFiles { get; set; } = [];
+    public IEnumerable<string> ExcludeFiles { get; set; } = new List<string>();
 
 
     [Option("ticket-prefix", Required = true, HelpText = "Jira ticket prefix (e.g., HSAMED).")]
     public string TicketPrefix { get; set; } = "";
 
 
-    [Option("output-dir", Required = false, HelpText = "Output directory for HTML export (defaults to ./report)",Default = "./report")]
+    [Option("output-dir", Required = false, HelpText = "Output directory for HTML export (defaults to ./reports)",Default = "./reports")]
     public string? OutputDir { get; set; }
 }
 

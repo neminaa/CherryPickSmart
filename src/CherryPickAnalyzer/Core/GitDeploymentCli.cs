@@ -46,7 +46,7 @@ public class GitDeploymentCli : IDisposable
             "kiota-lock.json",
             "v1.json",
         };
-        var excludeFiles = options.ExcludeFiles.Count != 0 ? 
+        var excludeFiles = options.ExcludeFiles.Count() != 0 ? 
             new HashSet<string>(options.ExcludeFiles, StringComparer.OrdinalIgnoreCase) : 
             new HashSet<string>(defaultExcludes, StringComparer.OrdinalIgnoreCase);
 
@@ -71,33 +71,10 @@ public class GitDeploymentCli : IDisposable
 
             AnalysisDisplay.DisplaySuggestions(analysis, options.TargetBranch);
 
-            // HTML Export
-            if (string.IsNullOrEmpty(options.OutputDir) && !analysis.HasContentDifferences) 
-                return 0;
-            try
-            {
-                var outputDir = options.OutputDir ?? Environment.CurrentDirectory;
-                var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-                var filename = $"cherry-pick-analysis_{options.SourceBranch.Replace("/", "_")}_to_{options.TargetBranch.Replace("/", "_")}_{timestamp}.html";
-                var outputPath = Path.Combine(outputDir, filename);
-                    
-                // Ensure output directory exists
-                Directory.CreateDirectory(outputDir);
-                    
-                var html = HtmlExportService.GenerateHtml(analysis, options.SourceBranch, options.TargetBranch);
-                await File.WriteAllTextAsync(outputPath, html, cts.Token);
-                var fileUrl = $"file:///{outputPath}";
-                AnsiConsole.MarkupLine("[green]✅ HTML report exported to:[/] ");
-                AnsiConsole.MarkupLine($"[link={fileUrl}]{Markup.Escape(outputPath)}[/]");
-                AnsiConsole.WriteLine();
-            } 
-            catch (Exception ex)
-            {
-                AnsiConsole.WriteException(ex);
-            }
-
+            await ExportHtmlReportAsync(options, analysis, cts);
 
             return 0;
+
         }
         catch (OperationCanceledException)
         {
@@ -108,6 +85,37 @@ public class GitDeploymentCli : IDisposable
         {
             AnsiConsole.WriteException(ex);
             return 1;
+        }
+    }
+
+    private static async Task ExportHtmlReportAsync(AnalyzeOptions options, DeploymentAnalysis analysis,
+        CancellationTokenSource cts)
+    {
+        // HTML Export
+        if (string.IsNullOrEmpty(options.OutputDir) && !analysis.HasContentDifferences) 
+            return;
+        try
+        {
+            Directory.SetCurrentDirectory(Environment.CurrentDirectory);
+            var outputDir = options.OutputDir ?? Environment.CurrentDirectory;
+            var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            var filename = $"cherry-pick-analysis_{options.SourceBranch.Replace("/", "_")}_to_{options.TargetBranch.Replace("/", "_")}_{timestamp}.html";
+            outputDir = Path.GetFullPath(outputDir);
+            var outputPath = Path.Combine(outputDir, filename);
+            
+            // Ensure output directory exists
+            Directory.CreateDirectory(outputDir);
+                    
+            var html = HtmlExportService.GenerateHtml(analysis, options.SourceBranch, options.TargetBranch);
+            await File.WriteAllTextAsync(outputPath, html, cts.Token);
+            var fileUrl = $"file:///{outputPath}";
+            AnsiConsole.MarkupLine("[green]✅ HTML report exported to:[/] [dim]Ctrl + Click to follow [/]");
+            AnsiConsole.MarkupLine($"[link={fileUrl}]{Markup.Escape(outputPath)}[/]");
+            AnsiConsole.WriteLine();
+        } 
+        catch (Exception ex)
+        {
+            AnsiConsole.WriteException(ex);
         }
     }
 

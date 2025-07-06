@@ -89,6 +89,19 @@ public class GitDeploymentCli : IDisposable
 
             _analysisDisplay.DisplaySuggestions(analysis, options.TargetBranch);
 
+            // Interactive ticket selection and cherry-pick command generation
+            if (analysis.HasContentDifferences && analysis.ContentAnalysis.TicketGroups.Any())
+            {
+                AnsiConsole.WriteLine();
+                var selectedTickets = CherryPickHelper.SelectTicketsInteractively(analysis.ContentAnalysis);
+                
+                if (selectedTickets.Any())
+                {
+                    AnsiConsole.WriteLine();
+                    CherryPickHelper.DisplayTicketBasedCherryPickCommands(options.TargetBranch, analysis.ContentAnalysis, selectedTickets);
+                }
+            }
+
             return 0;
         }
         catch (OperationCanceledException)
@@ -378,6 +391,57 @@ public class GitDeploymentCli : IDisposable
             AnsiConsole.MarkupLine($"[yellow]⚠️  Could not fetch Jira tickets: {ex.Message}[/]");
         }
 
+        // Populate ContentAnalysis with tree data for cherry-pick command generation
+        analysis.TicketGroups = [];
+        
+        foreach (var (ticketNumber, list) in ticketToMrs.OrderBy(g => g.Key))
+        {
+            var mrInfos = list.Where(mr => mr.MrCommits.Count > 0).ToList();
+            if (mrInfos.Count == 0) continue; // Skip tickets with no real MRs
+
+            var ticketGroup = new TicketGroup
+            {
+                TicketNumber = ticketNumber,
+                JiraInfo = ticketInfos.GetValueOrDefault(ticketNumber),
+                MergeRequests = [],
+                StandaloneCommits = []
+            };
+
+            foreach (var mrInfo in mrInfos)
+            {
+                // Find the merge commit info
+                var mergeCommit = outstandingCommits.FirstOrDefault(c => c.Sha == mrInfo.MergeCommitSha);
+                if (mergeCommit == null) continue;
+
+                var mergeRequestInfo = new MergeRequestInfo
+                {
+                    MergeCommit = mergeCommit,
+                    MrCommits = mrInfo.MrCommits,
+                    CherryPickShas = maximalMerges.GetValueOrDefault(mergeCommit.Sha, new HashSet<string>()).ToList()
+                };
+
+                ticketGroup.MergeRequests.Add(mergeRequestInfo);
+            }
+
+            analysis.TicketGroups.Add(ticketGroup);
+        }
+
+        // Add standalone cherry-pick commits (not covered by any merge) to "No Ticket" group
+        var unmergedCherryPicks = newCherryPickCommits
+            .Where(c => !cherryPicksCoveredByMerge.Contains(c.Sha))
+            .ToList();
+
+        if (unmergedCherryPicks.Any())
+        {
+            var noTicketGroup = analysis.TicketGroups.FirstOrDefault(g => g.TicketNumber == "No Ticket");
+            if (noTicketGroup == null)
+            {
+                noTicketGroup = new TicketGroup { TicketNumber = "No Ticket" };
+                analysis.TicketGroups.Add(noTicketGroup);
+            }
+            noTicketGroup.StandaloneCommits.AddRange(unmergedCherryPicks);
+        }
+
         // Create tree for ticket-centric display with Jira info
         var tree = new Spectre.Console.Tree("🎫 Ticket-Based Cherry-Pick Analysis")
             .Style(new Style(Color.Blue));
@@ -387,21 +451,18 @@ public class GitDeploymentCli : IDisposable
             .Start(_ =>
             {
                 // Display grouped by ticket (multi-ticket aware) with Jira status
-                foreach (var (ticketNumber, list) in ticketToMrs.OrderBy(g => g.Key))
+                foreach (var ticketGroup in analysis.TicketGroups)
                 {
-                    var mrInfos = list.Where(mr => mr.MrCommits.Count > 0).ToList();
-                    if (mrInfos.Count == 0) continue; // Skip tickets with no real MRs
-
                     if (cancellationToken.IsCancellationRequested) break;
 
                     // Get Jira info for this ticket
-                    var jiraInfo = ticketInfos.GetValueOrDefault(ticketNumber);
-                    var ticketIcon = ticketNumber == "No Ticket" ? "❓" : "🎫";
+                    var jiraInfo = ticketGroup.JiraInfo;
+                    var ticketIcon = ticketGroup.TicketNumber == "No Ticket" ? "❓" : "🎫";
                     var statusIcon = jiraInfo != null ? GetStatusIcon(jiraInfo.Status) : "";
                     var statusColor = jiraInfo != null ? GetStatusColor(jiraInfo.Status) : "white";
                     
                     // Build ticket header with Jira info
-                    var ticketHeader = $"[bold yellow]{ticketIcon} {Markup.Escape(ticketNumber)}[/]";
+                    var ticketHeader = $"[bold yellow]{ticketIcon} {Markup.Escape(ticketGroup.TicketNumber)}[/]";
                     if (jiraInfo != null)
                     {
                         ticketHeader += $" [{statusColor}]{statusIcon} {Markup.Escape(jiraInfo.Status)}[/]";
@@ -411,19 +472,16 @@ public class GitDeploymentCli : IDisposable
                             ticketHeader += $"\n   [dim]{Markup.Escape(summary)}[/]";
                         }
                     }
-                    ticketHeader += $" [grey]({mrInfos.Count} MRs)[/]";
+                    ticketHeader += $" [grey]({ticketGroup.MergeRequests.Count} MRs, {ticketGroup.StandaloneCommits.Count} standalone)[/]";
                     
                     var ticketNode = tree.AddNode(new TreeNode(new Markup(ticketHeader)));
 
-                    foreach (var mrInfo in mrInfos)
+                    // Display merge requests
+                    foreach (var mrInfo in ticketGroup.MergeRequests)
                     {
-                        // Find the merge commit info
-                        var mergeCommit = outstandingCommits.FirstOrDefault(c => c.Sha == mrInfo.MergeCommitSha);
-                        if (mergeCommit == null) continue;
-
-                        var isRecent = (DateTimeOffset.UtcNow - mergeCommit.Date).TotalDays <= 7;
+                        var isRecent = (DateTimeOffset.UtcNow - mrInfo.MergeCommit.Date).TotalDays <= 7;
                         var commitColor = isRecent ? "bold blue" : "blue";
-                        var mergeText = $"[{commitColor}]🔀 {Markup.Escape(mergeCommit.ShortSha)} {Markup.Escape(mergeCommit.Author)}: {Markup.Escape(mergeCommit.Message)}[/] [grey]({Markup.Escape(mergeCommit.Date.ToString("yyyy-MM-dd"))})[/]";
+                        var mergeText = $"[{commitColor}]🔀 {Markup.Escape(mrInfo.MergeCommit.ShortSha)} {Markup.Escape(mrInfo.MergeCommit.Author)}: {Markup.Escape(mrInfo.MergeCommit.Message)}[/] [grey]({Markup.Escape(mrInfo.MergeCommit.Date.ToString("yyyy-MM-dd"))})[/]";
                         var mergeNode = ticketNode.AddNode(new TreeNode(new Markup(mergeText)));
 
                         // Show MR commits (if you want)
@@ -432,6 +490,15 @@ public class GitDeploymentCli : IDisposable
                         {
                             mergeNode.AddNode(new TreeNode(new Markup(mrText)));
                         }
+                    }
+
+                    // Display standalone commits
+                    foreach (var standaloneCommit in ticketGroup.StandaloneCommits)
+                    {
+                        var isRecent = (DateTimeOffset.UtcNow - standaloneCommit.Date).TotalDays <= 7;
+                        var commitColor = isRecent ? "bold green" : "green";
+                        var standaloneText = $"[{commitColor}]📝 {Markup.Escape(standaloneCommit.ShortSha)} {Markup.Escape(standaloneCommit.Author)}: {Markup.Escape(standaloneCommit.Message)}[/] [grey]({Markup.Escape(standaloneCommit.Date.ToString("yyyy-MM-dd"))})[/]";
+                        ticketNode.AddNode(new TreeNode(new Markup(standaloneText)));
                     }
                 }
 
@@ -475,7 +542,7 @@ public class GitDeploymentCli : IDisposable
             "prod deployed" => "✅",
             "done" => "✅",
             "closed" => "🔒",
-            _ => "❓"
+            _ => "🔄"
         };
     }
 

@@ -47,6 +47,122 @@ public static class CherryPickHelper
             .BorderColor(Color.Green));
     }
 
+    public static List<string> GenerateCherryPickCommandsFromContentAnalysis(string targetBranch, Models.ContentAnalysis contentAnalysis, List<string>? selectedTickets = null)
+    {
+        var commands = new List<string> { $"git checkout {targetBranch}" };
+        var allCherryPickShas = new HashSet<string>();
+
+        foreach (var ticketGroup in contentAnalysis.TicketGroups)
+        {
+            // Skip if specific tickets are selected and this ticket is not in the selection
+            if (selectedTickets != null && !selectedTickets.Contains(ticketGroup.TicketNumber))
+                continue;
+
+            // Add merge commit SHAs (these represent the MRs)
+            foreach (var mrInfo in ticketGroup.MergeRequests)
+            {
+                allCherryPickShas.Add(mrInfo.MergeCommit.Sha);
+            }
+
+            // Add standalone commit SHAs
+            foreach (var commit in ticketGroup.StandaloneCommits)
+            {
+                allCherryPickShas.Add(commit.Sha);
+            }
+        }
+
+        // Generate cherry-pick commands in chronological order
+        var sortedCommits = allCherryPickShas
+            .Select(sha => contentAnalysis.TicketGroups
+                .SelectMany(g => g.MergeRequests.Select(mr => mr.MergeCommit).Concat(g.StandaloneCommits))
+                .FirstOrDefault(c => c.Sha == sha))
+            .Where(c => c != null)
+            .OrderBy(c => c!.Date)
+            .ToList();
+
+        commands.AddRange(sortedCommits.Select(c => $"git cherry-pick {c!.Sha}"));
+        return commands;
+    }
+
+    public static void DisplayTicketBasedCherryPickCommands(string targetBranch, Models.ContentAnalysis contentAnalysis, List<string>? selectedTickets = null)
+    {
+        var commands = GenerateCherryPickCommandsFromContentAnalysis(targetBranch, contentAnalysis, selectedTickets);
+        
+        var table = new Table()
+            .AddColumn("Step")
+            .AddColumn("Command")
+            .AddColumn("Ticket")
+            .AddColumn("Status")
+            .BorderColor(Color.Green);
+
+        var step = 1;
+        table.AddRow(step++.ToString(), $"[dim]git checkout {targetBranch}[/]", "", "");
+
+        foreach (var ticketGroup in contentAnalysis.TicketGroups)
+        {
+            // Skip if specific tickets are selected and this ticket is not in the selection
+            if (selectedTickets != null && !selectedTickets.Contains(ticketGroup.TicketNumber))
+                continue;
+
+            var ticketStatus = ticketGroup.JiraInfo?.Status ?? "Unknown";
+            var statusIcon = GetStatusIcon(ticketStatus);
+
+            // Add merge commits
+            foreach (var mrInfo in ticketGroup.MergeRequests)
+            {
+                table.AddRow(
+                    step++.ToString(),
+                    $"[dim]git cherry-pick {mrInfo.MergeCommit.ShortSha}[/]",
+                    $"[yellow]{ticketGroup.TicketNumber}[/]",
+                    $"[{GetStatusColor(ticketStatus)}]{statusIcon} {ticketStatus}[/]"
+                );
+            }
+
+            // Add standalone commits
+            foreach (var commit in ticketGroup.StandaloneCommits)
+            {
+                table.AddRow(
+                    step++.ToString(),
+                    $"[dim]git cherry-pick {commit.ShortSha}[/]",
+                    $"[yellow]{ticketGroup.TicketNumber}[/]",
+                    $"[{GetStatusColor(ticketStatus)}]{statusIcon} {ticketStatus}[/]"
+                );
+            }
+        }
+
+        AnsiConsole.Write(new Panel(table)
+            .Header("🍒 Ticket-Based Cherry-pick Commands")
+            .BorderColor(Color.Green));
+    }
+
+    private static string GetStatusIcon(string status)
+    {
+        return status.ToLower() switch
+        {
+            "to do" => "📋",
+            "in progress" => "🔄",
+            "pending prod deployment" => "⏳",
+            "prod deployed" => "✅",
+            "done" => "✅",
+            "closed" => "🔒",
+            _ => "🔄"
+        };
+    }
+
+    private static string GetStatusColor(string status)
+    {
+        return status.ToLower() switch
+        {
+            "to do" => "blue",
+            "in progress" => "yellow",
+            "pending prod deployment" => "red",
+            "prod deployed" => "green",
+            "done" => "green",
+            "closed" => "grey",
+            _ => "white"
+        };
+    }
+
     /// <summary>
     /// Extracts ticket numbers from commit messages using various HSAMED formats.
     /// Use this method to get all ticket keys for Jira lookups.
@@ -94,8 +210,6 @@ public static class CherryPickHelper
         }
         return [.. tickets.OrderBy(t => t)];
     }
-
-
 
     /// <summary>
     /// Returns the set of commit SHAs that are part of a merge request (MR), i.e., reachable from the feature branch parent but not from the target branch parent.
@@ -400,5 +514,207 @@ public static class CherryPickHelper
         }
         
         return result;
+    }
+
+    public static List<string> SelectTicketsInteractively(Models.ContentAnalysis contentAnalysis)
+    {
+        AnsiConsole.WriteLine();
+        AnsiConsole.Write(new Rule("Interactive Ticket Selection").RuleStyle("blue"));
+
+        // Create status-based options
+        var statusOptions = new List<string>();
+        var ticketsByStatus = contentAnalysis.TicketGroups
+            .Where(tg => tg.TicketNumber != "No Ticket")
+            .GroupBy(tg => tg.JiraInfo?.Status ?? "Unknown")
+            .OrderBy(g => GetStatusPriority(g.Key))
+            .ToList();
+
+        foreach (var group in ticketsByStatus)
+        {
+            statusOptions.Add($"{GetStatusIcon(group.Key)} {group.Key} ({group.Count()} tickets)");
+        }
+
+        // Add "No Ticket" option if exists
+        var noTicketGroup = contentAnalysis.TicketGroups.FirstOrDefault(tg => tg.TicketNumber == "No Ticket");
+        if (noTicketGroup != null)
+        {
+            statusOptions.Add($"❓ No Ticket (1 group)");
+        }
+
+        var selectedTickets = new List<string>();
+
+        // Step 1: Selection method
+        var selectionMethod = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("Select tickets by status (or choose 'Manual Selection' for individual tickets):")
+                .PageSize(15)
+                .AddChoices(new[] { "Manual Selection" }
+                    .Concat(statusOptions)
+                    .Concat(new[] { "Select All", "Select Ready for Deployment", "Skip Selection" }))
+        );
+
+        if (selectionMethod == "Skip Selection")
+        {
+            return [];
+        }
+
+        if (selectionMethod == "Select All")
+        {
+            return contentAnalysis.TicketGroups.Select(tg => tg.TicketNumber).ToList();
+        }
+
+        if (selectionMethod == "Select Ready for Deployment")
+        {
+            return contentAnalysis.TicketGroups
+                .Where(tg => IsReadyForDeployment(tg.JiraInfo?.Status))
+                .Select(tg => tg.TicketNumber)
+                .ToList();
+        }
+
+        if (selectionMethod == "Manual Selection")
+        {
+            // Step 2: Manual ticket selection
+            var ticketChoices = contentAnalysis.TicketGroups.Select(tg => 
+            {
+                var ticketId = tg.TicketNumber == "No Ticket" ? $"NO-TICKET-{Guid.NewGuid():N}" : tg.TicketNumber;
+                var statusIcon = GetStatusIcon(tg.JiraInfo?.Status ?? "Unknown");
+                var summary = tg.JiraInfo?.Summary ?? "";
+                if (summary.Length > 40) summary = summary.Substring(0, 37) + "...";
+                
+                var displayText = tg.TicketNumber == "No Ticket" 
+                    ? $"{statusIcon} {ticketId} | {tg.MergeRequests.Count} MRs, {tg.StandaloneCommits.Count} standalone"
+                    : $"{statusIcon} {Markup.Escape(tg.TicketNumber)} | {Markup.Escape(tg.JiraInfo?.Status ?? "Unknown")} | {Markup.Escape(summary)} | {tg.MergeRequests.Count} MRs, {tg.StandaloneCommits.Count} standalone";
+                
+                return new TicketChoice { TicketGroup = tg, DisplayText = displayText, TicketId = ticketId };
+            }).ToList();
+
+            var prompt = new MultiSelectionPrompt<TicketChoice>()
+                .Title("Select individual tickets:")
+                .PageSize(15)
+                .UseConverter(item => item.DisplayText)
+                .AddChoices(ticketChoices);
+
+            var selectedItems = AnsiConsole.Prompt(prompt);
+            selectedTickets.AddRange(selectedItems.Select(item => item.TicketId));
+        }
+        else if (selectionMethod.Contains("No Ticket"))
+        {
+            // Select "No Ticket" group
+            var ticketId = $"NO-TICKET-{Guid.NewGuid():N}";
+            selectedTickets.Add(ticketId);
+        }
+        else
+        {
+            // Status-based selection
+            var selectedStatus = selectionMethod.Substring(selectionMethod.IndexOf(' ') + 1, selectionMethod.IndexOf('(') - selectionMethod.IndexOf(' ') - 1);
+            var matchingTickets = contentAnalysis.TicketGroups
+                .Where(tg => tg.TicketNumber != "No Ticket" && (tg.JiraInfo?.Status ?? "Unknown") == selectedStatus);
+            
+            foreach (var ticketGroup in matchingTickets)
+            {
+                selectedTickets.Add(ticketGroup.TicketNumber);
+            }
+        }
+
+        // Step 3: Show dependencies and confirm selection
+        if (selectedTickets.Any())
+        {
+            var dependencies = FindDependencies(contentAnalysis, selectedTickets);
+            if (dependencies.Any())
+            {
+                AnsiConsole.WriteLine();
+                AnsiConsole.Write(new Panel(
+                    $"The following dependent tickets will also be included:\n" +
+                    string.Join("\n", dependencies.Select(d => $"• {d}"))
+                ).BorderColor(Color.Yellow));
+
+                var includeDependencies = AnsiConsole.Confirm("Include dependent tickets?", true);
+                if (includeDependencies)
+                {
+                    selectedTickets.AddRange(dependencies);
+                    selectedTickets = selectedTickets.Distinct().ToList();
+                }
+            }
+
+            // Display final selection summary
+            AnsiConsole.WriteLine();
+            AnsiConsole.Write(new Panel(
+                $"Selected {selectedTickets.Count} tickets for cherry-pick:\n" +
+                string.Join("\n", selectedTickets.Select(t => $"• {t}"))
+            ).BorderColor(Color.Green));
+        }
+
+        return selectedTickets;
+    }
+
+    private class TicketChoice
+    {
+        public Models.TicketGroup TicketGroup { get; set; } = new();
+        public string DisplayText { get; set; } = "";
+        public string TicketId { get; set; } = "";
+    }
+
+    private static bool IsReadyForDeployment(string? status)
+    {
+        if (string.IsNullOrEmpty(status)) return false;
+        
+        return status.ToLower() switch
+        {
+            "done" => true,
+            "prod deployed" => true,
+            "ready for deployment" => true,
+            "approved" => true,
+            _ => false
+        };
+    }
+
+    private static List<string> FindDependencies(Models.ContentAnalysis contentAnalysis, List<string> selectedTickets)
+    {
+        var dependencies = new HashSet<string>();
+        
+        // This is a simplified dependency check - you might want to enhance this
+        // based on your specific Jira workflow and ticket relationships
+        foreach (var ticketId in selectedTickets)
+        {
+            var ticketGroup = contentAnalysis.TicketGroups.FirstOrDefault(tg => 
+                tg.TicketNumber == ticketId || 
+                (tg.TicketNumber == "No Ticket" && ticketId.StartsWith("NO-TICKET-")));
+            
+            if (ticketGroup?.JiraInfo != null)
+            {
+                // Check for common dependency patterns in the summary
+                var summary = ticketGroup.JiraInfo.Summary.ToLower();
+                if (summary.Contains("depends on") || summary.Contains("blocked by"))
+                {
+                    // Extract potential ticket references
+                    var ticketMatches = Regex.Matches(summary, @"[A-Z]{2,}-\d+");
+                    foreach (Match match in ticketMatches)
+                    {
+                        var depTicket = match.Value;
+                        if (!selectedTickets.Contains(depTicket))
+                        {
+                            dependencies.Add(depTicket);
+                        }
+                    }
+                }
+            }
+        }
+        
+        return dependencies.ToList();
+    }
+
+    private static int GetStatusPriority(string status)
+    {
+        return status.ToLower() switch
+        {
+            "to do" => 1,
+            "in progress" => 2,
+            "pending prod deployment" => 3,
+            "prod deployed" => 4,
+            "done" => 5,
+            "closed" => 6,
+            "unknown" => 99,
+            _ => 50
+        };
     }
 }

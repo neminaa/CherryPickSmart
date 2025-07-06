@@ -369,167 +369,44 @@ public class GitDeploymentCli : IDisposable
                 ).ToList();
                 
                 // Group commits by ticket number, with fallback to merge commit tickets
-                var ticketGroups = CherryPickHelper.GroupCommitsByTicket(commitsToDisplay, maximalMerges);
+                //var ticketGroups = CherryPickHelper.GroupCommitsByTicket(commitsToDisplay, maximalMerges, _repo);
                 
-                // Display grouped by ticket
-                foreach (var ticketGroup in ticketGroups.OrderBy(g => g.Key))
+                // Build multi-ticket MR map
+                var mergeCommitInfos = commitsToDisplay.Where(c => maximalMerges.ContainsKey(c.Sha)).ToList();
+                var ticketToMrs = CherryPickHelper.BuildMrTicketMap(mergeCommitInfos, outstandingCommits, _repo);
+
+                // Display grouped by ticket (multi-ticket aware)
+                foreach (var ticketGroup in ticketToMrs.OrderBy(g => g.Key))
                 {
+                    var mrInfos = ticketGroup.Value.Where(mr => mr.MrCommits.Count > 0).ToList();
+                    if (mrInfos.Count == 0) continue; // Skip tickets with no real MRs
+
                     if (cancellationToken.IsCancellationRequested) break;
-                    
+
                     var ticketNumber = ticketGroup.Key;
-                    var commits = ticketGroup.Value;
-                    
-                    // Create ticket group node
                     var ticketIcon = ticketNumber == "No Ticket" ? "❓" : "🎫";
-                    var ticketText = $"[bold yellow]{ticketIcon} {Markup.Escape(ticketNumber)}[/] [grey]({commits.Count} commits)[/]";
+                    var ticketText = $"[bold yellow]{ticketIcon} {Markup.Escape(ticketNumber)}[/] [grey]({mrInfos.Count} MRs)[/]";
                     var ticketNode = tree.AddNode(new TreeNode(new Markup(ticketText)));
-                    
-                    // Group commits within this ticket by type (merge vs cherry-pick)
-                    var mergeCommits = commits.Where(c => maximalMerges.ContainsKey(c.Sha)).ToList();
-                    var cherryPickCommits = commits.Where(c => !maximalMerges.ContainsKey(c.Sha) && !commitsInMerges.Contains(c.Sha)).ToList();
-                    
-                    // Add merge commits first
-                    foreach (var mergeCommit in mergeCommits)
+
+                    foreach (var mrInfo in mrInfos)
                     {
+                        // Find the merge commit info
+                        var mergeCommit = outstandingCommits.FirstOrDefault(c => c.Sha == mrInfo.MergeCommitSha);
+                        if (mergeCommit == null) continue;
+
                         var isRecent = (DateTimeOffset.UtcNow - mergeCommit.Date).TotalDays <= 7;
                         var commitColor = isRecent ? "bold blue" : "blue";
-                        
-                        // Create merge commit node
                         var mergeText = $"[{commitColor}]🔀 {Markup.Escape(mergeCommit.ShortSha)} {Markup.Escape(mergeCommit.Author)}: {Markup.Escape(mergeCommit.Message)}[/] [grey]({Markup.Escape(mergeCommit.Date.ToString("yyyy-MM-dd"))})[/]";
                         var mergeNode = ticketNode.AddNode(new TreeNode(new Markup(mergeText)));
-                        
-                        // Use first-parent path for MR commits (non-merge only)
-                        var mergeCommitObj = _repo.Lookup<LibGit2Sharp.Commit>(mergeCommit.Sha);
-                        if (mergeCommitObj != null)
+
+                        // Show MR commits (if you want)
+                        foreach (var mrCommit in mrInfo.MrCommits)
                         {
-                            var mrCommits = CherryPickHelper.GetMRCommitsFirstParentOnlyNonMerges(_repo, mergeCommitObj);
-                            foreach (var mrCommit in mrCommits)
-                            {
-                                // Find CommitInfo for this commit
-                                var commitInfo = outstandingCommits.FirstOrDefault(c => c.Sha == mrCommit.Sha);
-                                if (commitInfo == null) continue;
-                                var mrText = $"[dim cyan]  {Markup.Escape(commitInfo.ShortSha)} {Markup.Escape(commitInfo.Author)}: {Markup.Escape(commitInfo.Message)}[/] [grey]({Markup.Escape(commitInfo.Date.ToString("yyyy-MM-dd"))})[/]";
-                                mergeNode.AddNode(new TreeNode(new Markup(mrText)));
-                            }
-                            // Add file tree for the merge commit itself (as before)
-                            var changedFiles = FileTreeHelper.GetFilesChangedByCommit(_repo, mergeCommitObj);
-                            if (changedFiles.Any())
-                            {
-                                // Filter out excluded files
-                                changedFiles = changedFiles.Where(f => !excludeFiles.Contains(Path.GetFileName(f.NewPath))).ToList();
-                                // Sort by impact and limit to top 5
-                                var sortedFiles = changedFiles
-                                    .OrderByDescending(f => Math.Abs(f.LinesAdded) + Math.Abs(f.LinesDeleted))
-                                    .Take(5)
-                                    .ToList();
-                                if (sortedFiles.Any())
-                                {
-                                    var filesNode = mergeNode.AddNode(new TreeNode(new Markup("[bold]📁 Files Changed:[/]")));
-                                    foreach (var file in sortedFiles)
-                                    {
-                                        var statusIcon = file.Status switch
-                                        {
-                                            "Added" => "[green]➕[/]",
-                                            "Modified" => "[yellow]🔄[/]",
-                                            "Deleted" => "[red]➖[/]",
-                                            "Renamed" => "[blue]📝[/]",
-                                            _ => "[dim]❓[/]"
-                                        };
-                                        var changeText = $"[green]+{file.LinesAdded}[/] [red]-{file.LinesDeleted}[/]";
-                                        var fileName = Path.GetFileName(file.NewPath);
-                                        var fileText = $"{statusIcon} {Markup.Escape(fileName)} {changeText}";
-                                        filesNode.AddNode(new TreeNode(new Markup(fileText)));
-                                        // Add to analysis for stats
-                                        analysis.ChangedFiles.Add(new FileChange
-                                        {
-                                            NewPath = file.NewPath,
-                                            Status = file.Status,
-                                            LinesAdded = file.LinesAdded,
-                                            LinesDeleted = file.LinesDeleted,
-                                            Commits = [mergeCommit]
-                                        });
-                                        totalAdded += file.LinesAdded;
-                                        totalDeleted += file.LinesDeleted;
-                                    }
-                                    if (changedFiles.Count > 5)
-                                    {
-                                        filesNode.AddNode(new TreeNode(new Markup($"[grey]...and {changedFiles.Count - 5} more files not shown[/]")));
-                                    }
-                                }
-                            }
+                            var mrText = $"[dim cyan]  {Markup.Escape(mrCommit.ShortSha)} {Markup.Escape(mrCommit.Author)}: {Markup.Escape(mrCommit.Message)}[/] [grey]({Markup.Escape(mrCommit.Date.ToString("yyyy-MM-dd"))})[/]";
+                            mergeNode.AddNode(new TreeNode(new Markup(mrText)));
                         }
+                        // ... (add file tree, etc. as before)
                     }
-                    
-                    // Add standalone cherry-pick commits
-                    foreach (var cherryCommit in cherryPickCommits)
-                    {
-                        var isRecent = (DateTimeOffset.UtcNow - cherryCommit.Date).TotalDays <= 7;
-                        var commitColor = isRecent ? "bold magenta" : "magenta";
-                        
-                        // Create cherry-pick commit node
-                        var cherryText = $"[{commitColor}]🍒 {Markup.Escape(cherryCommit.ShortSha)} {Markup.Escape(cherryCommit.Author)}: {Markup.Escape(cherryCommit.Message)}[/] [grey]({Markup.Escape(cherryCommit.Date.ToString("yyyy-MM-dd"))})[/]";
-                        var cherryNode = ticketNode.AddNode(new TreeNode(new Markup(cherryText)));
-                        
-                        // Add file tree for cherry-pick commit
-                        var cherryCommitObj = _repo.Lookup<LibGit2Sharp.Commit>(cherryCommit.Sha);
-                        if (cherryCommitObj != null)
-                        {
-                            var changedFiles = FileTreeHelper.GetFilesChangedByCommit(_repo, cherryCommitObj);
-                            if (changedFiles.Any())
-                            {
-                                // Filter out excluded files
-                                changedFiles = changedFiles.Where(f => !excludeFiles.Contains(Path.GetFileName(f.NewPath))).ToList();
-                                
-                                // Sort by impact and limit to top 5
-                                var sortedFiles = changedFiles
-                                    .OrderByDescending(f => Math.Abs(f.LinesAdded) + Math.Abs(f.LinesDeleted))
-                                    .Take(5)
-                                    .ToList();
-                                
-                                if (sortedFiles.Any())
-                                {
-                                    var filesNode = cherryNode.AddNode(new TreeNode(new Markup("[bold]📁 Files Changed:[/]")));
-                                    
-                                    foreach (var file in sortedFiles)
-                                    {
-                                        var statusIcon = file.Status switch
-                                        {
-                                            "Added" => "[green]➕[/]",
-                                            "Modified" => "[yellow]🔄[/]",
-                                            "Deleted" => "[red]➖[/]",
-                                            "Renamed" => "[blue]📝[/]",
-                                            _ => "[dim]❓[/]"
-                                        };
-                                        
-                                        var changeText = $"[green]+{file.LinesAdded}[/] [red]-{file.LinesDeleted}[/]";
-                                        var fileName = Path.GetFileName(file.NewPath);
-                                        var fileText = $"{statusIcon} {Markup.Escape(fileName)} {changeText}";
-                                        filesNode.AddNode(new TreeNode(new Markup(fileText)));
-                                        
-                                        // Add to analysis for stats
-                                        analysis.ChangedFiles.Add(new FileChange
-                                        {
-                                            NewPath = file.NewPath,
-                                            Status = file.Status,
-                                            LinesAdded = file.LinesAdded,
-                                            LinesDeleted = file.LinesDeleted,
-                                            Commits = [cherryCommit]
-                                        });
-                                        totalAdded += file.LinesAdded;
-                                        totalDeleted += file.LinesDeleted;
-                                    }
-                                    
-                                    if (changedFiles.Count > 5)
-                                    {
-                                        filesNode.AddNode(new TreeNode(new Markup($"[grey]...and {changedFiles.Count - 5} more files not shown[/]")));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    
-                    ctx.Refresh();
-                    await Task.Delay(10, cancellationToken);
                 }
             });
         

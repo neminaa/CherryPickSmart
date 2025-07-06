@@ -54,15 +54,15 @@ public static class CherryPickHelper
             return new List<string>();
 
         var tickets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        
-        // Regex patterns for various HSAMED formats
+        var expectedPrefix = "HSAMED";
+        var minSimilarity = 85;
+
+        // Regex patterns for possible ticket formats (including typos)
         var patterns = new[]
         {
-            @"HSAMED-\d+",           // HSAMED-1234
-            @"\[HSAMED-\d+\]",       // [HSAMED-1234]
-            @"HSAMED\s+\d+",         // HSAMED 1234
-            @"hsamed\s+\d+",         // hsamed 1234
-            @"hsamed-\d+"            // hsamed-1234
+            @"[A-Za-z]{5,7}-\d+",           // e.g. HSAMED-1234, hsmaed-1234, etc.
+            @"[A-Za-z]{5,7}\s+\d+",         // e.g. HSAMED 1234, hsmaed 1234, etc.
+            @"\[[A-Za-z]{5,7}-\d+\]",      // e.g. [HSAMED-1234]
         };
 
         foreach (var pattern in patterns)
@@ -70,13 +70,23 @@ public static class CherryPickHelper
             var matches = Regex.Matches(message, pattern, RegexOptions.IgnoreCase);
             foreach (Match match in matches)
             {
-                var ticket = match.Value.ToUpperInvariant();
-                // Remove brackets if present
-                ticket = ticket.Replace("[", "").Replace("]", "");
-                tickets.Add(ticket);
+                var raw = match.Value.ToUpperInvariant().Replace("[", "").Replace("]", "").Replace(" ", "-");
+                // Split prefix and number
+                var dashIdx = raw.IndexOf('-');
+                if (dashIdx > 0)
+                {
+                    var prefix = raw.Substring(0, dashIdx);
+                    var number = raw.Substring(dashIdx + 1);
+                    // Fuzzy match prefix to expected
+                    int sim = Fuzz.Ratio(prefix, expectedPrefix);
+                    if (sim >= minSimilarity)
+                    {
+                        var ticket = $"{expectedPrefix}-{number}";
+                        tickets.Add(ticket);
+                    }
+                }
             }
         }
-
         return tickets.OrderBy(t => t).ToList();
     }
 
@@ -86,7 +96,10 @@ public static class CherryPickHelper
     /// <param name="commits">List of commits to group</param>
     /// <param name="mergeToCherryPicks">Dictionary mapping merge commits to their included cherry-pick commits</param>
     /// <returns>Dictionary of ticket number to list of commits</returns>
-    public static Dictionary<string, List<CommitInfo>> GroupCommitsByTicket(List<CommitInfo> commits, Dictionary<string, HashSet<string>> mergeToCherryPicks = null)
+    public static Dictionary<string, List<CommitInfo>> GroupCommitsByTicket(
+        List<CommitInfo> commits,
+        Dictionary<string, HashSet<string>> mergeToCherryPicks = null,
+        Repository repo = null)
     {
         var ticketGroups = new Dictionary<string, List<CommitInfo>>();
         var noTicketCommits = new List<CommitInfo>();
@@ -111,6 +124,51 @@ public static class CherryPickHelper
             }
         }
 
+        // --- MR ticket inference from MR and its commits (robust fuzzy logic) ---
+        if (repo != null)
+        {
+            foreach (var commit in commits)
+            {
+                // Look up the real commit object
+                var realCommit = repo.Lookup<LibGit2Sharp.Commit>(commit.Sha);
+                if (realCommit == null) continue;
+                if (realCommit.Parents.Count() > 1)
+                {
+                    // Collect all tickets from MR message and its MR commits
+                    var ticketsInMR = new List<string>();
+                    ticketsInMR.AddRange(ExtractTicketNumbers(commit.Message));
+                    var mrCommits = GetMRCommitsFirstParentOnlyNonMerges(repo, realCommit);
+                    ticketsInMR.AddRange(mrCommits.SelectMany(c => ExtractTicketNumbers(c.Message)));
+                    if (ticketsInMR.Any())
+                    {
+                        // Fuzzy-correct all tickets to the most common/correct form
+                        var mrKnownTickets = ticketsInMR.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                        var correctedTickets = ticketsInMR
+                            .Select(ticket =>
+                            {
+                                var best = mrKnownTickets
+                                    .Select(t => new { Ticket = t, Score = Fuzz.Ratio(ticket, t) })
+                                    .OrderByDescending(x => x.Score)
+                                    .FirstOrDefault(x => x.Score >= 90);
+                                return best != null ? best.Ticket : ticket;
+                            })
+                            .ToList();
+                        // Use the most common/corrected ticket
+                        var finalTicket = correctedTickets
+                            .GroupBy(t => t)
+                            .OrderByDescending(g => g.Count())
+                            .First().Key;
+                        if (!ticketToCommits.ContainsKey(finalTicket))
+                            ticketToCommits[finalTicket] = new List<CommitInfo>();
+                        ticketToCommits[finalTicket].Add(commit);
+                        allTickets.Add(finalTicket);
+                        // Remove from noTicketCommits if present
+                        noTicketCommits.Remove(commit);
+                    }
+                }
+            }
+        }
+
         // Build set of common/known tickets (appearing more than once)
         var knownTickets = ticketToCommits.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
 
@@ -120,11 +178,9 @@ public static class CherryPickHelper
         {
             var ticket = kvp.Key;
             var commitsForTicket = kvp.Value;
-            // If this ticket is not in the known set (i.e., typo or rare), try to correct
             string corrected = ticket;
             if (!knownTickets.Contains(ticket))
             {
-                // Find the closest known ticket by FuzzySharp
                 var best = knownTickets
                     .Select(t => new { Ticket = t, Score = Fuzz.Ratio(ticket, t) })
                     .OrderByDescending(x => x.Score)
@@ -169,7 +225,6 @@ public static class CherryPickHelper
             }
         }
 
-        // Add the remaining no-ticket group if it has commits
         if (noTicketCommits.Any())
             correctedTicketToCommits["No Ticket"] = noTicketCommits;
 
@@ -262,5 +317,62 @@ public static class CherryPickHelper
     {
         var all = GetMRCommitsFirstParentOnly(repo, mergeCommit);
         return all.Where(c => c.Parents.Count() == 1).ToList(); // Only non-merge commits
+    }
+
+    public class MrTicketInfo
+    {
+        public string MergeCommitSha { get; set; } = string.Empty;
+        public List<string> Tickets { get; set; } = new();
+        public List<CommitInfo> MrCommits { get; set; } = new();
+    }
+
+    public static Dictionary<string, List<MrTicketInfo>> BuildMrTicketMap(
+        List<CommitInfo> mergeCommits,
+        List<CommitInfo> outstandingCommits,
+        Repository repo)
+    {
+        var ticketToMrs = new Dictionary<string, List<MrTicketInfo>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var mergeCommit in mergeCommits)
+        {
+            var mergeCommitObj = repo.Lookup<LibGit2Sharp.Commit>(mergeCommit.Sha);
+            if (mergeCommitObj == null) continue;
+            var mrCommits = GetMRCommitsFirstParentOnlyNonMerges(repo, mergeCommitObj);
+            // Collect all tickets from MR and its commits
+            var tickets = new List<string>();
+            tickets.AddRange(ExtractTicketNumbers(mergeCommit.Message));
+            tickets.AddRange(mrCommits.SelectMany(c => ExtractTicketNumbers(c.Message)));
+            // Fuzzy-correct all tickets
+            var mrKnownTickets = tickets.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var correctedTickets = tickets
+                .Select(ticket =>
+                {
+                    var best = mrKnownTickets
+                        .Select(t => new { Ticket = t, Score = Fuzz.Ratio(ticket, t) })
+                        .OrderByDescending(x => x.Score)
+                        .FirstOrDefault(x => x.Score >= 90);
+                    return best != null ? best.Ticket : ticket;
+                })
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (!correctedTickets.Any())
+                correctedTickets.Add("No Ticket");
+            var info = new MrTicketInfo
+            {
+                MergeCommitSha = mergeCommit.Sha ?? string.Empty,
+                Tickets = correctedTickets,
+                MrCommits = mrCommits
+                    .Select(c => outstandingCommits.FirstOrDefault(ci => ci.Sha == c.Sha))
+                    .Where(ci => ci != null)
+                    .Select(ci => ci!) // null-forgiving operator
+                    .ToList()
+            };
+            foreach (var ticket in correctedTickets)
+            {
+                if (!ticketToMrs.ContainsKey(ticket))
+                    ticketToMrs[ticket] = new List<MrTicketInfo>();
+                ticketToMrs[ticket].Add(info);
+            }
+        }
+        return ticketToMrs;
     }
 }

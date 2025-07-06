@@ -261,12 +261,18 @@ public class HtmlExportService
                             <div class="mr-block">
                                 <div class="commit mr-commit">
                                     <input type="checkbox" class="mr-checkbox" data-ticket="{{ ticket.ticket_number }}" data-mr="{{ mr.merge_commit.short_sha }}" onchange="handleMrCheckboxChange(this)" />
+                                    {{ if mr.merge_commit.status != "Unknown" }}
+                                    <span class="status-badge" style="background: {{ mr.merge_commit.status_color }}; color: #fff; margin-right: 8px;">{{ mr.merge_commit.status }}</span>
+                                    {{ end }}
                                     <div class="row1"><span class="icon">🔀</span><span class="sha">{{ mr.merge_commit.short_sha }}</span><span class="message">{{ mr.merge_commit.message }}</span></div>
                                     <div class="row2"><span class="author">{{ mr.merge_commit.author }}</span> | <span class="date">{{ mr.merge_commit.date }}</span></div>
                                 </div>
                                 {{ for commit in mr.mr_commits }}
                                 <div class="commit child">
                                     <input type="checkbox" class="commit-checkbox" data-ticket="{{ ticket.ticket_number }}" data-mr="{{ mr.merge_commit.short_sha }}" data-commit="{{ commit.short_sha }}" onchange="handleCommitCheckboxChange(this)" />
+                                    {{ if commit.status != "Unknown" }}
+                                    <span class="status-badge" style="background: {{ commit.status_color }}; color: #fff; margin-right: 8px;">{{ commit.status }}</span>
+                                    {{ end }}
                                     <div class="row1"><span class="icon">📝</span><span class="sha">{{ commit.short_sha }}</span><span class="message">{{ commit.message }}</span></div>
                                     <div class="row2"><span class="author">{{ commit.author }}</span> | <span class="date">{{ commit.date }}</span></div>
                                 </div>
@@ -276,6 +282,9 @@ public class HtmlExportService
                             {{ for commit in ticket.standalone_commits }}
                             <div class="commit">
                                 <input type="checkbox" class="commit-checkbox" data-ticket="{{ ticket.ticket_number }}" data-commit="{{ commit.short_sha }}" onchange="handleCommitCheckboxChange(this)" />
+                                {{ if commit.status != "Unknown" }}
+                                <span class="status-badge" style="background: {{ commit.status_color }}; color: #fff; margin-right: 8px;">{{ commit.status }}</span>
+                                {{ end }}
                                 <div class="row1"><span class="icon">📝</span><span class="sha">{{ commit.short_sha }}</span><span class="message">{{ commit.message }}</span></div>
                                 <div class="row2"><span class="author">{{ commit.author }}</span> | <span class="date">{{ commit.date }}</span></div>
                             </div>
@@ -439,39 +448,46 @@ public class HtmlExportService
         function updateCommands() {
             const commandsEl = document.getElementById('commands');
             let commands = ['git checkout {{ target_branch }}'];
-            // Gather selected commits in order (oldest first)
             let selectedItems = [];
-            // Collect all checked MR and commit checkboxes in DOM order
+            let selectedMrShas = new Set();
+
+            // First, collect all checked MRs
+            document.querySelectorAll('.mr-checkbox:checked').forEach(cb => {
+                selectedMrShas.add(cb.dataset.mr);
+            });
+
+            // Then, collect all checked MR and commit checkboxes in DOM order
             document.querySelectorAll('.mr-checkbox:checked, .commit-checkbox:checked').forEach(cb => {
-                let sha, type, ticket, message;
+                let sha, type, ticket, message, parentMr;
                 if (cb.classList.contains('mr-checkbox')) {
                     sha = cb.dataset.mr;
                     type = 'mr';
-                    // Find parent ticket card
-                    const card = cb.closest('.ticket-card');
-                    ticket = card ? card.dataset.ticket : '';
-                    // Find commit message
-                    const msgEl = cb.parentElement.querySelector('.message');
-                    message = msgEl ? msgEl.textContent.trim() : '';
+                    parentMr = null;
                 } else {
                     sha = cb.dataset.commit;
                     type = 'commit';
-                    // Find parent ticket card
-                    const card = cb.closest('.ticket-card');
-                    ticket = card ? card.dataset.ticket : '';
-                    // Find commit message
-                    const msgEl = cb.parentElement.querySelector('.message');
-                    message = msgEl ? msgEl.textContent.trim() : '';
+                    parentMr = cb.dataset.mr || null;
                 }
+                // If this is a commit and its parent MR is selected, skip it
+                if (type === 'commit' && parentMr && selectedMrShas.has(parentMr)) return;
+
+                // Find parent ticket card
+                const card = cb.closest('.ticket-card');
+                ticket = card ? card.dataset.ticket : '';
+                // Find commit message
+                const msgEl = cb.parentElement.querySelector('.message');
+                message = msgEl ? msgEl.textContent.trim() : '';
                 selectedItems.push({sha, type, ticket, message});
             });
-            // Remove duplicates (in case both MR and its commit are selected)
+
+            // Remove duplicates
             const seen = new Set();
             selectedItems = selectedItems.filter(item => {
                 if (seen.has(item.sha)) return false;
                 seen.add(item.sha);
                 return true;
             });
+
             // Build commands with comments
             selectedItems.forEach(item => {
                 if (item.sha) {
@@ -529,38 +545,20 @@ public class HtmlExportService
         applyFilters();
 
         // --- List.js and Filter Integration ---
-        document.addEventListener('DOMContentLoaded', function() {
-            var options = { 
-                valueNames: ['name', 'status', 'summary'], 
-                page: 15, 
-                pagination: true 
-            };
-            var ticketList = new List('ticket-list', options);
-            document.querySelectorAll('.filter-btn').forEach(function(btn) {
-                btn.addEventListener('click', function() {
-                    var status = btn.getAttribute('data-status');
-                    document.querySelectorAll('.filter-btn').forEach(function(b) { b.classList.remove('active'); });
-                    btn.classList.add('active');
-                    if (status === 'all') {
-                        ticketList.filter();
-                    } else {
-                        ticketList.filter(function(item) {
-                            return item.elm.getAttribute('data-status') === status;
-                        });
-                    }
-                });
-            });
-            ticketList.on('updated', function() {
-                // Restore checkbox states after filtering
-                document.querySelectorAll('.ticket-card').forEach(card => {
-                    const ticketNumber = card.dataset.ticket;
-                    const {ticket, mrs, commits} = getTicketCheckboxes(ticketNumber);
-                    ticket.checked = selected.tickets.has(ticketNumber);
-                    mrs.forEach(cb => { cb.checked = selected.mrs.has(cb.dataset.mr); });
-                    commits.forEach(cb => { cb.checked = selected.commits.has(cb.dataset.commit); });
-                });
-            });
-        });
+        // (Removed List.js filter button click handlers to avoid conflicts with custom multi-filter logic)
+
+        // --- Utility: Scroll to Ticket ---
+        function scrollToTicket(ticketNumber) {
+            const element = document.getElementById('ticket-' + ticketNumber);
+            if (element) {
+                element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                // Optionally highlight the ticket briefly
+                element.style.boxShadow = '0 0 0 3px #3b82f6';
+                setTimeout(() => {
+                    element.style.boxShadow = '';
+                }, 2000);
+            }
+        }
     </script>
 </body>
 </html>
@@ -622,14 +620,18 @@ public class HtmlExportService
                         short_sha = mr.MergeCommit.ShortSha,
                         message = mr.MergeCommit.Message,
                         author = mr.MergeCommit.Author,
-                        date = mr.MergeCommit.Date.ToString("yyyy-MM-dd")
+                        date = mr.MergeCommit.Date.ToString("yyyy-MM-dd"),
+                        status = ticketGroup.JiraInfo?.Status ?? "Unknown",
+                        status_color = ticketGroup.JiraInfo != null ? GetStatusColor(ticketGroup.JiraInfo.Status) : "#6b7280"
                     },
                     mr_commits = mr.MrCommits.Select(c => new
                     {
                         short_sha = c.ShortSha,
                         message = c.Message,
                         author = c.Author,
-                        date = c.Date.ToString("yyyy-MM-dd")
+                        date = c.Date.ToString("yyyy-MM-dd"),
+                        status = ticketGroup.JiraInfo?.Status ?? "Unknown",
+                        status_color = ticketGroup.JiraInfo != null ? GetStatusColor(ticketGroup.JiraInfo.Status) : "#6b7280"
                     }).ToList()
                 }).ToList(),
                 standalone_commits = ticketGroup.StandaloneCommits.Select(c => new
@@ -637,7 +639,9 @@ public class HtmlExportService
                     short_sha = c.ShortSha,
                     message = c.Message,
                     author = c.Author,
-                    date = c.Date.ToString("yyyy-MM-dd")
+                    date = c.Date.ToString("yyyy-MM-dd"),
+                    status = ticketGroup.JiraInfo?.Status ?? "Unknown",
+                    status_color = ticketGroup.JiraInfo != null ? GetStatusColor(ticketGroup.JiraInfo.Status) : "#6b7280"
                 }).ToList(),
                 dependencies = uniqueDependencies
                     .Where(dep => ticketLookup.ContainsKey(dep))

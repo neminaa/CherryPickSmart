@@ -373,7 +373,6 @@ public class GitDeploymentCli : IDisposable
         {
             var jiraConfig = CherryPickHelper.LoadOrCreateJiraConfig();
             var allTickets = ticketToMrs.Keys
-                .Where(ticket => ticket != "No Ticket")
                 .ToList();
 
             if (allTickets.Any())

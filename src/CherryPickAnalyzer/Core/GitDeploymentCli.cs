@@ -109,8 +109,8 @@ public class GitDeploymentCli : IDisposable
             var html = HtmlExportService.GenerateHtml(analysis, options.SourceBranch, options.TargetBranch);
             await File.WriteAllTextAsync(outputPath, html, cts.Token);
             var fileUrl = $"file:///{outputPath}";
-            AnsiConsole.MarkupLine("[green]✅ HTML report exported to:[/] [dim]Ctrl + Click to follow [/]");
-            AnsiConsole.MarkupLine($"[link={fileUrl}]{Markup.Escape(outputPath)}[/]");
+            AnsiConsole.MarkupLine($"[green]✅ HTML report exported to:[/] [link={fileUrl}]{Markup.Escape(outputPath)}[/]");
+            AnsiConsole.MarkupLine("\t\t\t\t[italic dim]Ctrl+Click to open the report[/]");
             AnsiConsole.WriteLine();
         } 
         catch (Exception ex)

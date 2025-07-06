@@ -424,25 +424,25 @@ public static class CherryPickHelper
 
     private static JiraConfig PromptForJiraConfig(string configDir, string configPath)
     {
-        Console.WriteLine("Jira configuration not found. Please provide your Jira credentials:");
-        Console.WriteLine();
+        AnsiConsole.WriteLine("Jira configuration not found. Please provide your Jira credentials:");
+        AnsiConsole.WriteLine();
         
-        Console.Write("Jira Base URL (e.g., https://yourcompany.atlassian.net): ");
+        AnsiConsole.Write("Jira Base URL (e.g., https://yourcompany.atlassian.net): ");
         var baseUrl = Console.ReadLine()?.Trim();
         if (string.IsNullOrEmpty(baseUrl))
             throw new InvalidOperationException("Jira Base URL is required");
         
-        Console.Write("Jira Username (email): ");
+        AnsiConsole.Write("Jira Username (email): ");
         var username = Console.ReadLine()?.Trim();
         if (string.IsNullOrEmpty(username))
             throw new InvalidOperationException("Jira Username is required");
         
-        Console.Write("Jira API Token: ");
+        AnsiConsole.Write("Jira API Token: ");
         var apiToken = ReadPassword();
         if (string.IsNullOrEmpty(apiToken))
             throw new InvalidOperationException("Jira API Token is required");
         
-        Console.Write("Default Jira Project Key (e.g., HSAMED): ");
+        AnsiConsole.Write("Default Jira Project Key (e.g., HSAMED): ");
         var defaultProject = Console.ReadLine()?.Trim() ?? "";
         
         var config = new JiraConfig
@@ -458,7 +458,7 @@ public static class CherryPickHelper
         var json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(configPath, json);
         
-        Console.WriteLine($"Configuration saved to {configPath}");
+        AnsiConsole.WriteLine($"Configuration saved to {configPath}");
         return config;
     }
 

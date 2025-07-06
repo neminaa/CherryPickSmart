@@ -131,4 +131,102 @@ public class AnalysisDisplay
 
         AnsiConsole.WriteLine(markdown);
     }
+
+    public void DisplayTicketMultiSelect(Dictionary<string, CherryPickHelper.JiraTicketInfo> ticketInfos, List<string> allTickets)
+    {
+        if (!ticketInfos.Any())
+        {
+            AnsiConsole.MarkupLine("[yellow]No Jira tickets found to display[/]");
+            return;
+        }
+
+        AnsiConsole.WriteLine();
+        AnsiConsole.Write(new Rule("Ticket Selection Interface").RuleStyle("blue"));
+
+        // Group tickets by status for better organization
+        var ticketsByStatus = ticketInfos.Values
+            .GroupBy(t => t.Status)
+            .OrderBy(g => GetStatusPriority(g.Key))
+            .ToList();
+
+        foreach (var statusGroup in ticketsByStatus)
+        {
+            var statusIcon = GetStatusIcon(statusGroup.Key);
+            var statusColor = GetStatusColor(statusGroup.Key);
+            
+            AnsiConsole.Write(new Panel($"[{statusColor}]{statusIcon} {statusGroup.Key}[/]")
+                .BorderColor(Color.Blue));
+
+            foreach (var ticket in statusGroup.OrderBy(t => t.Key))
+            {
+                var commitCount = allTickets.Count(t => t == ticket.Key);
+                var summary = ticket.Summary.Length > 60 ? ticket.Summary.Substring(0, 57) + "..." : ticket.Summary;
+                
+                var ticketInfo = $"🎫 {ticket.Key} | Status: {ticket.Status} | Commits: {commitCount}\n" +
+                                $"   Summary: {summary}";
+                
+                AnsiConsole.WriteLine(ticketInfo);
+            }
+            
+            AnsiConsole.WriteLine();
+        }
+
+        // Add filter controls
+        AnsiConsole.Write(new Panel(
+            "Filters:\n" +
+            "• Status: Filter by ticket status\n" +
+            "• Dependencies: Auto-select required tickets\n" +
+            "• Search: Filter by ticket key or summary"
+        ).BorderColor(Color.Yellow));
+
+        // Add selection controls
+        AnsiConsole.Write(new Panel(
+            "Selection:\n" +
+            "• Select All: Choose all visible tickets\n" +
+            "• Select Ready: Select tickets ready for deployment\n" +
+            "• Generate Commands: Create cherry-pick commands for selected tickets"
+        ).BorderColor(Color.Green));
+    }
+
+    private static string GetStatusIcon(string status)
+    {
+        return status.ToLower() switch
+        {
+            "to do" => "📋",
+            "in progress" => "🔄",
+            "pending prod deployment" => "⏳",
+            "prod deployed" => "✅",
+            "done" => "✅",
+            "closed" => "🔒",
+            _ => "❓"
+        };
+    }
+
+    private static string GetStatusColor(string status)
+    {
+        return status.ToLower() switch
+        {
+            "to do" => "blue",
+            "in progress" => "yellow",
+            "pending prod deployment" => "red",
+            "prod deployed" => "green",
+            "done" => "green",
+            "closed" => "grey",
+            _ => "white"
+        };
+    }
+
+    private static int GetStatusPriority(string status)
+    {
+        return status.ToLower() switch
+        {
+            "to do" => 1,
+            "in progress" => 2,
+            "pending prod deployment" => 3,
+            "prod deployed" => 4,
+            "done" => 5,
+            "closed" => 6,
+            _ => 99
+        };
+    }
 }

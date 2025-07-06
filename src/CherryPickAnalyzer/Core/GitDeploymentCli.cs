@@ -83,21 +83,20 @@ public class GitDeploymentCli : IDisposable
                         .ToList();
                     // Bulk fetch all tickets at once
                     var ticketInfos = await CherryPickHelper.FetchJiraTicketsBulkAsync(tickets, jiraConfig);
-                    foreach (var ticket in tickets)
+                    
+                    // Display multi-select interface for tickets
+                    _analysisDisplay.DisplayTicketMultiSelect(ticketInfos, tickets);
+                    
+                    // Show summary of fetched tickets
+                    AnsiConsole.MarkupLine($"[green]✅ Fetched {ticketInfos.Count} tickets from Jira[/]");
+                    foreach (var ticket in tickets.Where(t => !ticketInfos.ContainsKey(t)))
                     {
-                        if (ticketInfos.TryGetValue(ticket, out var info))
-                        {
-                            AnsiConsole.MarkupLine($"[blue]Jira: {info.Key}[/] [green]{info.Status}[/] - {info.Summary}");
-                        }
-                        else
-                        {
-                            AnsiConsole.MarkupLine($"[red]Jira: {ticket} not found or error[/]");
-                        }
+                        AnsiConsole.MarkupLine($"[red]⚠️  Ticket {ticket} not found in Jira[/]");
                     }
                 }
                 catch (Exception ex)
                 {
-                    AnsiConsole.MarkupLine($"[red]Jira config error: {ex.Message}[/]");
+                    AnsiConsole.WriteException(ex,ExceptionFormats.Default);
                 }
             }
 
@@ -362,7 +361,7 @@ public class GitDeploymentCli : IDisposable
 
         // Create tree for ticket-centric display
         var tree = new Spectre.Console.Tree("🎫 Ticket-Based Cherry-Pick Analysis")
-            .Style(Style.Parse("blue"));
+            .Style(new Style(Color.Blue));
 
         await AnsiConsole.Live(tree)
             .AutoClear(true)

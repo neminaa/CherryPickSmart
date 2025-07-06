@@ -5,11 +5,18 @@ using Spectre.Console;
 
 
 
-return await Parser.Default.ParseArguments<AnalyzeOptions, CherryPickOptions>(args)
+return await Parser.Default.ParseArguments<AnalyzeOptions>(args)
     .MapResult(
-        (AnalyzeOptions opts) => RunAnalyzeAsync(opts),
-        (CherryPickOptions opts) => RunCherryPickAsync(opts),
-        errs => Task.FromResult(1));
+        RunAnalyzeAsync,
+        errs =>
+        {
+            AnsiConsole.MarkupLine("[red]Error parsing command line arguments:[/]");
+            foreach (var err in errs)
+            {
+                AnsiConsole.MarkupLine($"  - {Markup.Escape(err.Tag.ToString())}");
+            }
+            return Task.FromResult(1);
+        });
 
 
 
@@ -19,20 +26,6 @@ static async Task<int> RunAnalyzeAsync(AnalyzeOptions options)
     {
         using var cli = new GitDeploymentCli(options.RepoPath);
         return await cli.AnalyzeAsync(options);
-    }
-    catch (Exception ex)
-    {
-        AnsiConsole.WriteException(ex);
-        return 1;
-    }
-}
-
-static async Task<int> RunCherryPickAsync(CherryPickOptions options)
-{
-    try
-    {
-        using var cli = new GitDeploymentCli(options.RepoPath);
-        return await cli.CherryPickAsync(options);
     }
     catch (Exception ex)
     {

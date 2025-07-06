@@ -5,7 +5,6 @@ using CherryPickAnalyzer.Options;
 using CherryPickAnalyzer.Services;
 using LibGit2Sharp;
 using Spectre.Console;
-using CherryPickOptions = CherryPickAnalyzer.Options.CherryPickOptions;
 using RepositoryStatus = CherryPickAnalyzer.Models.RepositoryStatus;
 
 namespace CherryPickAnalyzer.Core;
@@ -67,7 +66,7 @@ public class GitDeploymentCli : IDisposable
 
             _branchValidator.ValidateBranches(options.SourceBranch, options.TargetBranch);
 
-            var analysis = await AnalyzeWithProgressAsync(options.SourceBranch, options.TargetBranch, options.MergeHighlightMode, excludeFiles, options.ShowAllCommits, cts.Token);
+            var analysis = await AnalyzeWithProgressAsync(options.SourceBranch, options.TargetBranch, options.MergeHighlightMode, cts.Token);
 
             _analysisDisplay.DisplaySuggestions(analysis, options.TargetBranch);
 
@@ -84,9 +83,8 @@ public class GitDeploymentCli : IDisposable
                     // Ensure output directory exists
                     Directory.CreateDirectory(outputDir);
                     
-                    var htmlService = new HtmlExportService();
-                    var html = htmlService.GenerateHtml(analysis, options.SourceBranch, options.TargetBranch);
-                    await File.WriteAllTextAsync(outputPath, html);
+                    var html = HtmlExportService.GenerateHtml(analysis, options.SourceBranch, options.TargetBranch);
+                    await File.WriteAllTextAsync(outputPath, html, cts.Token);
                     var fileUrl = $"file:///{outputPath}";
                     AnsiConsole.MarkupLine("[green]✅ HTML report exported to:[/] ");
                     AnsiConsole.MarkupLine($"[link={fileUrl}]{Markup.Escape(outputPath)}[/]");
@@ -113,65 +111,6 @@ public class GitDeploymentCli : IDisposable
         }
     }
 
-    public async Task<int> CherryPickAsync(CherryPickOptions options)
-    {
-        try
-        {
-            AnsiConsole.Write(new FigletText("TSP GIT Analyzer")
-                .LeftJustified()
-                .Color(Color.Green));
-
-            _branchValidator.ValidateBranches(options.SourceBranch, options.TargetBranch);
-
-            // Default excludes
-            var defaultExcludes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            {
-                "packages.lock.json",
-                "package-lock.json",
-                "yarn.lock",
-                "pnpm-lock.yaml"
-            };
-            var excludeFiles = new HashSet<string>(defaultExcludes, StringComparer.OrdinalIgnoreCase);
-
-            var analysis = await AnalyzeWithProgressAsync(options.SourceBranch, options.TargetBranch, "ancestry", excludeFiles, true, CancellationToken.None);
-
-            if (analysis.CherryPickAnalysis.NewCommits.Count == 0)
-            {
-                AnsiConsole.MarkupLine("[green]✅ No commits to cherry-pick - branches are in sync![/]");
-                return 0;
-            }
-
-            var commitsToApply = analysis.CherryPickAnalysis.NewCommits;
-
-            if (options.Interactive)
-            {
-                commitsToApply = CherryPickHelper.SelectCommitsInteractively(analysis.CherryPickAnalysis.NewCommits);
-            }
-
-            if (commitsToApply.Count == 0)
-            {
-                AnsiConsole.MarkupLine("[yellow]No commits selected[/]");
-                return 0;
-            }
-
-            var commands = CherryPickHelper.GenerateCherryPickCommands(options.TargetBranch, commitsToApply);
-
-            CherryPickHelper.DisplayCherryPickCommands(commands);
-
-            if (options.Execute)
-            {
-                return await _gitExecutor.ExecuteCherryPickCommandsAsync(commands);
-            }
-
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            AnsiConsole.WriteException(ex);
-            return 1;
-        }
-    }
-
     public void Dispose()
     {
         _repo.Dispose();
@@ -185,8 +124,6 @@ public class GitDeploymentCli : IDisposable
         string sourceBranch,
         string targetBranch,
         string mergeHighlightMode,
-        HashSet<string> excludeFiles,
-        bool showAllCommits,
         CancellationToken cancellationToken = default)
     {
         var analysis = new DeploymentAnalysis();
@@ -212,7 +149,7 @@ public class GitDeploymentCli : IDisposable
         if (analysis.HasContentDifferences)
         {
             analysis.ContentAnalysis = await GetDetailedContentAnalysisAsync(
-                sourceBranch, targetBranch, analysis.OutstandingCommits, analysis.CherryPickAnalysis.NewCommits, mergeHighlightMode, excludeFiles, showAllCommits, cancellationToken);
+                sourceBranch, analysis.OutstandingCommits, analysis.CherryPickAnalysis.NewCommits, mergeHighlightMode, cancellationToken);
         }
 
         return analysis;
@@ -220,23 +157,20 @@ public class GitDeploymentCli : IDisposable
 
     private async Task<ContentAnalysis> GetDetailedContentAnalysisAsync(
         string sourceBranch,
-        string targetBranch,
         List<CommitInfo> outstandingCommits,
         List<CommitInfo> newCherryPickCommits,
         string mergeHighlightMode,
-        HashSet<string> excludeFiles,
-        bool showAllCommits,
         CancellationToken cancellationToken = default)
     {
-        var source = _branchValidator.GetBranch(sourceBranch);
-        var target = _branchValidator.GetBranch(targetBranch);
 
         var analysis = new ContentAnalysis { ChangedFiles = [] };
         const int totalAdded = 0;
         const int totalDeleted = 0;
 
         // Build set of cherry-pick commit SHAs for quick lookup
-        var cherryPickCommitShas = new HashSet<string>(newCherryPickCommits.Select(c => c.Sha));
+        var cherryPickCommitShas = new HashSet<string>(
+            newCherryPickCommits
+                .Select(c => c.Sha));
 
         // Precompute merge commit coverage using maximal/superset approach
         var mergeToCherryPicks = new Dictionary<string, HashSet<string>>();
@@ -375,7 +309,7 @@ public class GitDeploymentCli : IDisposable
             var allTickets = ticketToMrs.Keys
                 .ToList();
 
-            if (allTickets.Any())
+            if (allTickets.Count != 0)
             {
                 AnsiConsole.MarkupLine("[blue]🔍 Fetching Jira ticket information...[/]");
                 ticketInfos = await CherryPickHelper.FetchJiraTicketsBulkAsync(allTickets, jiraConfig);
@@ -413,7 +347,7 @@ public class GitDeploymentCli : IDisposable
                 {
                     MergeCommit = mergeCommit,
                     MrCommits = mrInfo.MrCommits,
-                    CherryPickShas = maximalMerges.GetValueOrDefault(mergeCommit.Sha, new HashSet<string>()).ToList()
+                    CherryPickShas = [.. maximalMerges.GetValueOrDefault(mergeCommit.Sha, [])]
                 };
 
                 ticketGroup.MergeRequests.Add(mergeRequestInfo);
@@ -427,7 +361,7 @@ public class GitDeploymentCli : IDisposable
             .Where(c => !cherryPicksCoveredByMerge.Contains(c.Sha))
             .ToList();
 
-        if (unmergedCherryPicks.Any())
+        if (unmergedCherryPicks.Count != 0)
         {
             // Group standalone commits by their ticket numbers
             var standaloneByTicket = new Dictionary<string, List<CommitInfo>>(StringComparer.OrdinalIgnoreCase);
@@ -436,7 +370,7 @@ public class GitDeploymentCli : IDisposable
             foreach (var commit in unmergedCherryPicks)
             {
                 var tickets = CherryPickHelper.ExtractTicketNumbers(commit.Message);
-                if (tickets.Any())
+                if (tickets.Count != 0)
                 {
                     // Use the first ticket found (or could be more sophisticated)
                     var primaryTicket = tickets.First();
@@ -468,7 +402,7 @@ public class GitDeploymentCli : IDisposable
             }
 
             // Add truly no-ticket commits to "No Ticket" group
-            if (noTicketCommits.Any())
+            if (noTicketCommits.Count != 0)
             {
                 var noTicketGroup = analysis.TicketGroups.FirstOrDefault(g => g.TicketNumber == "No Ticket");
                 if (noTicketGroup == null)
@@ -506,7 +440,7 @@ public class GitDeploymentCli : IDisposable
                         ticketHeader += $" [{statusColor}]{statusIcon} {Markup.Escape(jiraInfo.Status)}[/]";
                         if (!string.IsNullOrEmpty(jiraInfo.Summary))
                         {
-                            var summary = jiraInfo.Summary.Length > 60 ? jiraInfo.Summary.Substring(0, 57) + "..." : jiraInfo.Summary;
+                            var summary = jiraInfo.Summary.Length > 60 ? string.Concat(jiraInfo.Summary.AsSpan(0, 57), "...") : jiraInfo.Summary;
                             ticketHeader += $"\n   [dim]{Markup.Escape(summary)}[/]";
                         }
                     }

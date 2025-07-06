@@ -1,10 +1,10 @@
+using System.Text.RegularExpressions;
 using CherryPickAnalyzer.Models;
 using Scriban;
-using System.Text;
 
 namespace CherryPickAnalyzer.Services;
 
-public class HtmlExportService
+public partial class HtmlExportService
 {
     private const string HtmlTemplate = """
 <!DOCTYPE html>
@@ -564,7 +564,7 @@ public class HtmlExportService
 </html>
 """;
 
-    public string GenerateHtml(DeploymentAnalysis analysis, string sourceBranch, string targetBranch)
+    public static string GenerateHtml(DeploymentAnalysis analysis, string sourceBranch, string targetBranch)
     {
         var template = Template.Parse(HtmlTemplate);
         
@@ -586,7 +586,7 @@ public class HtmlExportService
         return template.Render(context);
     }
     
-    private List<object> PrepareTicketGroups(List<TicketGroup> ticketGroups)
+    private static List<object> PrepareTicketGroups(List<TicketGroup> ticketGroups)
     {
         var result = new List<object>();
         
@@ -596,7 +596,7 @@ public class HtmlExportService
         
         foreach (var ticketGroup in ticketGroups)
         {
-            var uniqueDependencies = dependencies.GetValueOrDefault(ticketGroup.TicketNumber, new List<string>()).Distinct().ToList();
+            var uniqueDependencies = dependencies.GetValueOrDefault(ticketGroup.TicketNumber, []).Distinct().ToList();
             var uniqueDependents = dependencies.Where(kvp => kvp.Value.Contains(ticketGroup.TicketNumber))
                 .Select(kvp => kvp.Key)
                 .Distinct()
@@ -649,7 +649,7 @@ public class HtmlExportService
                     {
                         ticket_number = dep,
                         status = ticketLookup[dep].JiraInfo?.Status ?? "Unknown",
-                        status_color = ticketLookup[dep].JiraInfo != null ? GetStatusColor(ticketLookup[dep].JiraInfo.Status) : "#6b7280"
+                        status_color = ticketLookup[dep].JiraInfo != null ? GetStatusColor(ticketLookup[dep].JiraInfo?.Status) : "#6b7280"
                     }).ToList(),
                 dependents = uniqueDependents
                     .Where(dep => ticketLookup.ContainsKey(dep) && !uniqueDependencies.Contains(dep))
@@ -657,7 +657,7 @@ public class HtmlExportService
                     {
                         ticket_number = dep,
                         status = ticketLookup[dep].JiraInfo?.Status ?? "Unknown",
-                        status_color = ticketLookup[dep].JiraInfo != null ? GetStatusColor(ticketLookup[dep].JiraInfo.Status) : "#6b7280"
+                        status_color = ticketLookup[dep].JiraInfo != null ? GetStatusColor(ticketLookup[dep].JiraInfo?.Status) : "#6b7280"
                     }).ToList()
             };
             
@@ -667,7 +667,7 @@ public class HtmlExportService
         return result;
     }
     
-    private Dictionary<string, List<string>> AnalyzeTicketDependencies(List<TicketGroup> ticketGroups)
+    private static Dictionary<string, List<string>> AnalyzeTicketDependencies(List<TicketGroup> ticketGroups)
     {
         var dependencies = new Dictionary<string, List<string>>();
         var shaToTickets = new Dictionary<string, List<string>>();
@@ -678,19 +678,19 @@ public class HtmlExportService
             foreach (var mr in group.MergeRequests)
             {
                 if (!shaToTickets.ContainsKey(mr.MergeCommit.Sha))
-                    shaToTickets[mr.MergeCommit.Sha] = new List<string>();
+                    shaToTickets[mr.MergeCommit.Sha] = [];
                 shaToTickets[mr.MergeCommit.Sha].Add(group.TicketNumber);
                 foreach (var c in mr.MrCommits)
                 {
                     if (!shaToTickets.ContainsKey(c.Sha))
-                        shaToTickets[c.Sha] = new List<string>();
+                        shaToTickets[c.Sha] = [];
                     shaToTickets[c.Sha].Add(group.TicketNumber);
                 }
             }
             foreach (var c in group.StandaloneCommits)
             {
                 if (!shaToTickets.ContainsKey(c.Sha))
-                    shaToTickets[c.Sha] = new List<string>();
+                    shaToTickets[c.Sha] = [];
                 shaToTickets[c.Sha].Add(group.TicketNumber);
             }
         }
@@ -718,21 +718,21 @@ public class HtmlExportService
                         ticketDeps.Add(ticket);
                 }
             }
-            if (ticketDeps.Any())
-                dependencies[group.TicketNumber] = ticketDeps.ToList();
+            if (ticketDeps.Count != 0)
+                dependencies[group.TicketNumber] = [.. ticketDeps];
         }
         return dependencies;
     }
 
-    private List<string> ExtractTicketReferences(string message)
+    private static List<string> ExtractTicketReferences(string message)
     {
         var tickets = new List<string>();
-        var words = message.Split(new[] { ' ', '\t', '\n', '\r', ',', '.', ';', ':', '!', '?' }, StringSplitOptions.RemoveEmptyEntries);
+        var words = message.Split([' ', '\t', '\n', '\r', ',', '.', ';', ':', '!', '?'], StringSplitOptions.RemoveEmptyEntries);
         
         foreach (var word in words)
         {
             // Look for ticket patterns like HSAMED-1234, JIRA-567, etc.
-            if (System.Text.RegularExpressions.Regex.IsMatch(word, @"^[A-Z]+-\d+$"))
+            if (TicketKeyRegex().IsMatch(word))
             {
                 tickets.Add(word);
             }
@@ -741,7 +741,7 @@ public class HtmlExportService
         return tickets;
     }
     
-    private List<object> GetAvailableStatuses(List<TicketGroup> ticketGroups)
+    private static List<object> GetAvailableStatuses(List<TicketGroup> ticketGroups)
     {
         var statuses = ticketGroups
             .Where(tg => tg.TicketNumber != "No Ticket" && tg.JiraInfo != null)
@@ -784,8 +784,9 @@ public class HtmlExportService
         };
     }
     
-    private static string GetStatusColor(string status)
+    private static string GetStatusColor(string? status)
     {
+        status ??= string.Empty;
         return status.ToLower() switch
         {
             "to do" => "#3b82f6",
@@ -793,7 +794,6 @@ public class HtmlExportService
             "pending prod deployment" => "#ef4444",
             "prod deployed" => "#10b981",
             "done" => "#10b981",
-            "closed" => "#6b7280",
             _ => "#6b7280"
         };
     }
@@ -811,4 +811,7 @@ public class HtmlExportService
             _ => 50
         };
     }
+
+    [GeneratedRegex(@"^[A-Za-z]+-\d+$")]
+    private static partial Regex TicketKeyRegex();
 } 

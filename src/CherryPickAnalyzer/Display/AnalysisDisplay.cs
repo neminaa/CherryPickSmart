@@ -134,7 +134,7 @@ public class AnalysisDisplay
 
     public void DisplayTicketMultiSelect(Dictionary<string, CherryPickHelper.JiraTicketInfo> ticketInfos, List<string> allTickets)
     {
-        if (!ticketInfos.Any())
+        if (ticketInfos.Count == 0)
         {
             AnsiConsole.MarkupLine("[yellow]No Jira tickets found to display[/]");
             return;
@@ -190,7 +190,7 @@ public class AnalysisDisplay
 
     public List<CherryPickHelper.JiraTicketInfo> DisplayTicketMultiSelectInteractive(Dictionary<string, CherryPickHelper.JiraTicketInfo> ticketInfos, List<string> allTickets)
     {
-        if (!ticketInfos.Any())
+        if (ticketInfos.Count == 0)
         {
             AnsiConsole.MarkupLine("[yellow]No Jira tickets found to display[/]");
             return [];
@@ -219,7 +219,7 @@ public class AnalysisDisplay
         var selectedTickets = AnsiConsole.Prompt(prompt);
         
         // Display summary of selected tickets
-        if (selectedTickets.Any())
+        if (selectedTickets.Count != 0)
         {
             AnsiConsole.WriteLine();
             AnsiConsole.Write(new Panel($"Selected {selectedTickets.Count} tickets for cherry-pick")

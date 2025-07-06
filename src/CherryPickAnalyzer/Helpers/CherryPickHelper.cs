@@ -4,7 +4,6 @@ using System.Text.RegularExpressions;
 using LibGit2Sharp;
 using FuzzySharp;
 using System.Text.Json;
-using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 
@@ -334,7 +333,7 @@ public static class CherryPickHelper
                 })
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
-            if (!correctedTickets.Any())
+            if (correctedTickets.Count == 0)
                 correctedTickets.Add("No Ticket");
             var info = new MrTicketInfo
             {
@@ -474,7 +473,7 @@ public static class CherryPickHelper
 
     public static async Task<Dictionary<string, JiraTicketInfo>> FetchJiraTicketsBulkAsync(List<string> ticketKeys, JiraConfig config)
     {
-        if (!ticketKeys.Any()) return [];
+        if (ticketKeys.Count == 0) return [];
         
         using var client = new HttpClient();
         var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{config.JiraUsername}:{config.JiraApiToken}"));
@@ -556,12 +555,11 @@ public static class CherryPickHelper
             case "Skip Selection":
                 return [];
             case "Select All":
-                return contentAnalysis.TicketGroups.Select(tg => tg.TicketNumber).ToList();
+                return [.. contentAnalysis.TicketGroups.Select(tg => tg.TicketNumber)];
             case "Select Ready for Deployment":
-                return contentAnalysis.TicketGroups
+                return [.. contentAnalysis.TicketGroups
                     .Where(tg => IsReadyForDeployment(tg.JiraInfo?.Status))
-                    .Select(tg => tg.TicketNumber)
-                    .ToList();
+                    .Select(tg => tg.TicketNumber)];
             case "Select by Status":
             {
                 // Step 2: Multi-status selection
@@ -590,7 +588,7 @@ public static class CherryPickHelper
                 AnsiConsole.WriteLine();
                 AnsiConsole.MarkupLine($"[green]Selected {selectedStatuses.Count} status(es):[/]");
             
-                if (selectedStatuses.Any())
+                if (selectedStatuses.Count != 0)
                 {
                     foreach (var statusChoice in selectedStatuses)
                     {
@@ -671,10 +669,10 @@ public static class CherryPickHelper
         }
 
         // Step 3: Show dependencies and confirm selection
-        if (selectedTickets.Any())
+        if (selectedTickets.Count != 0)
         {
             var dependencies = FindDependencies(contentAnalysis, selectedTickets);
-            if (dependencies.Any())
+            if (dependencies.Count != 0)
             {
                 AnsiConsole.WriteLine();
                 AnsiConsole.Write(new Panel(
@@ -686,7 +684,7 @@ public static class CherryPickHelper
                 if (includeDependencies)
                 {
                     selectedTickets.AddRange(dependencies);
-                    selectedTickets = selectedTickets.Distinct().ToList();
+                    selectedTickets = [.. selectedTickets.Distinct()];
                 }
 
                 // Display final selection summary
@@ -762,7 +760,7 @@ public static class CherryPickHelper
             }
         }
         
-        return dependencies.ToList();
+        return [.. dependencies];
     }
 
     private static int GetStatusPriority(string status)

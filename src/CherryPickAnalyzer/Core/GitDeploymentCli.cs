@@ -68,14 +68,23 @@ public class GitDeploymentCli : IDisposable
 
             var analysis = await AnalyzeWithProgressAsync(options.SourceBranch, options.TargetBranch, options.MergeHighlightMode, excludeFiles, options.ShowAllCommits, cts.Token);
 
+            _analysisDisplay.DisplaySuggestions(analysis, options.TargetBranch);
+
+            // Interactive ticket selection and cherry-pick command generation
+            if (analysis.HasContentDifferences && analysis.ContentAnalysis.TicketGroups.Any())
+            {
+                AnsiConsole.WriteLine();
+                var selectedTickets = CherryPickHelper.SelectTicketsInteractively(analysis.ContentAnalysis);
+
+                if (selectedTickets.Any())
+                {
+                    AnsiConsole.WriteLine();
+                    CherryPickHelper.DisplayTicketBasedCherryPickCommands(options.TargetBranch, analysis.ContentAnalysis, selectedTickets);
+                }
+            }
+
             switch (options.Format.ToLower())
             {
-                case "table":
-                    _analysisDisplay.DisplayAnalysisAsTable(analysis, options.SourceBranch, options.TargetBranch);
-                    var commands = CherryPickHelper.GenerateCherryPickCommands(options.TargetBranch,
-                        analysis.CherryPickAnalysis.AlreadyAppliedCommits);
-                    CherryPickHelper.DisplayCherryPickCommands(commands);
-                    break;
                 case "json":
                     _analysisDisplay.DisplayAnalysisAsJson(analysis);
                     break;
@@ -87,20 +96,6 @@ public class GitDeploymentCli : IDisposable
                     return 1;
             }
 
-            _analysisDisplay.DisplaySuggestions(analysis, options.TargetBranch);
-
-            // Interactive ticket selection and cherry-pick command generation
-            if (analysis.HasContentDifferences && analysis.ContentAnalysis.TicketGroups.Any())
-            {
-                AnsiConsole.WriteLine();
-                var selectedTickets = CherryPickHelper.SelectTicketsInteractively(analysis.ContentAnalysis);
-                
-                if (selectedTickets.Any())
-                {
-                    AnsiConsole.WriteLine();
-                    CherryPickHelper.DisplayTicketBasedCherryPickCommands(options.TargetBranch, analysis.ContentAnalysis, selectedTickets);
-                }
-            }
 
             return 0;
         }
@@ -222,7 +217,7 @@ public class GitDeploymentCli : IDisposable
     }
 
     private async Task<ContentAnalysis> GetDetailedContentAnalysisAsync(
-        string sourceBranch, 
+        string sourceBranch,
         string targetBranch,
         List<CommitInfo> outstandingCommits,
         List<CommitInfo> newCherryPickCommits,
@@ -233,7 +228,7 @@ public class GitDeploymentCli : IDisposable
     {
         var source = _branchValidator.GetBranch(sourceBranch);
         var target = _branchValidator.GetBranch(targetBranch);
-        
+
         var analysis = new ContentAnalysis { ChangedFiles = [] };
         const int totalAdded = 0;
         const int totalDeleted = 0;
@@ -244,7 +239,7 @@ public class GitDeploymentCli : IDisposable
         // Precompute merge commit coverage using maximal/superset approach
         var mergeToCherryPicks = new Dictionary<string, HashSet<string>>();
         var cherryPicksCoveredByMerge = new HashSet<string>();
-        
+
         // For ancestry mode: collect merge SHAs in first-parent history of source branch
         var firstParentMerges = new HashSet<string>();
         if (mergeHighlightMode == "ancestry")
@@ -273,7 +268,7 @@ public class GitDeploymentCli : IDisposable
                 continue;
 
             var foundCherryPicks = new HashSet<string>();
-            
+
             if (mergeHighlightMode == "message")
             {
                 // Highlight if commit message contains "into 'sourceBranch'"
@@ -305,7 +300,7 @@ public class GitDeploymentCli : IDisposable
                     depth++;
                 }
             }
-            
+
             if (foundCherryPicks.Count > 0)
                 mergeToCherryPicks[commit.Sha] = foundCherryPicks;
         }
@@ -313,25 +308,25 @@ public class GitDeploymentCli : IDisposable
         // Apply maximal/superset MR approach - keep only the most comprehensive merges
         var maximalMerges = new Dictionary<string, HashSet<string>>();
         var mergeCommits = mergeToCherryPicks.Keys.ToList();
-        
+
         for (var i = 0; i < mergeCommits.Count; i++)
         {
             var currentMerge = mergeCommits[i];
             var currentCherryPicks = mergeToCherryPicks[currentMerge];
             var isMaximal = true;
-            
+
             // Check if this merge is superseded by a later, more comprehensive merge
             for (var j = i + 1; j < mergeCommits.Count; j++)
             {
                 var laterMerge = mergeCommits[j];
                 var laterCherryPicks = mergeToCherryPicks[laterMerge];
-                
+
                 // If later merge includes all cherry-picks from current merge, current is not maximal
                 if (!currentCherryPicks.All(cp => laterCherryPicks.Contains(cp))) continue;
                 isMaximal = false;
                 break;
             }
-            
+
             if (isMaximal)
                 maximalMerges[currentMerge] = currentCherryPicks;
         }
@@ -339,33 +334,33 @@ public class GitDeploymentCli : IDisposable
         // Collect commits for display - prioritize merge commits over individual cherry-picks
         var commitsToDisplay = new List<CommitInfo>();
         var commitsInMerges = new HashSet<string>();
-        
+
         // Add merge commits first
         foreach (var (mergeSha, hashSet) in maximalMerges)
         {
             var mergeCommit = outstandingCommits.FirstOrDefault(c => c.Sha == mergeSha);
             if (mergeCommit == null) continue;
             commitsToDisplay.Add(mergeCommit);
-                
+
             // Track which cherry-pick commits are included in merges
             foreach (var cherrySha in hashSet)
             {
                 commitsInMerges.Add(cherrySha);
             }
         }
-        
+
         // Add standalone cherry-pick commits (not covered by any merge)
         var standaloneCherryPicks = newCherryPickCommits
             .Where(c => !cherryPicksCoveredByMerge.Contains(c.Sha))
             .ToList();
         commitsToDisplay.AddRange(standaloneCherryPicks);
-        
+
         // Remove any cherry-pick commits that are already included in merge commits
-        commitsToDisplay = [.. commitsToDisplay.Where(c => 
+        commitsToDisplay = [.. commitsToDisplay.Where(c =>
             maximalMerges.ContainsKey(c.Sha) || // Keep merge commits
             !commitsInMerges.Contains(c.Sha)    // Keep cherry-picks not in merges
         )];
-        
+
         // Build multi-ticket MR map
         var mergeCommitInfos = commitsToDisplay.Where(c => maximalMerges.ContainsKey(c.Sha)).ToList();
         var ticketToMrs = CherryPickHelper.BuildMrTicketMap(mergeCommitInfos, outstandingCommits, _repo);
@@ -378,7 +373,7 @@ public class GitDeploymentCli : IDisposable
             var allTickets = ticketToMrs.Keys
                 .Where(ticket => ticket != "No Ticket")
                 .ToList();
-            
+
             if (allTickets.Any())
             {
                 AnsiConsole.MarkupLine("[blue]🔍 Fetching Jira ticket information...[/]");
@@ -393,7 +388,7 @@ public class GitDeploymentCli : IDisposable
 
         // Populate ContentAnalysis with tree data for cherry-pick command generation
         analysis.TicketGroups = [];
-        
+
         foreach (var (ticketNumber, list) in ticketToMrs.OrderBy(g => g.Key))
         {
             var mrInfos = list.Where(mr => mr.MrCommits.Count > 0).ToList();
@@ -460,7 +455,7 @@ public class GitDeploymentCli : IDisposable
                     var ticketIcon = ticketGroup.TicketNumber == "No Ticket" ? "❓" : "🎫";
                     var statusIcon = jiraInfo != null ? GetStatusIcon(jiraInfo.Status) : "";
                     var statusColor = jiraInfo != null ? GetStatusColor(jiraInfo.Status) : "white";
-                    
+
                     // Build ticket header with Jira info
                     var ticketHeader = $"[bold yellow]{ticketIcon} {Markup.Escape(ticketGroup.TicketNumber)}[/]";
                     if (jiraInfo != null)
@@ -473,7 +468,7 @@ public class GitDeploymentCli : IDisposable
                         }
                     }
                     ticketHeader += $" [grey]({ticketGroup.MergeRequests.Count} MRs, {ticketGroup.StandaloneCommits.Count} standalone)[/]";
-                    
+
                     var ticketNode = tree.AddNode(new TreeNode(new Markup(ticketHeader)));
 
                     // Display merge requests
@@ -504,7 +499,7 @@ public class GitDeploymentCli : IDisposable
 
                 return Task.CompletedTask;
             });
-        
+
         // Print the tree again so it remains visible after the live context
         AnsiConsole.Write(tree);
 

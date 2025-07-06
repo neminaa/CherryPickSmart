@@ -10,7 +10,7 @@ public class ContentAnalysis
 public class TicketGroup
 {
     public string TicketNumber { get; set; } = "";
-    public CherryPickAnalyzer.Helpers.CherryPickHelper.JiraTicketInfo? JiraInfo { get; set; }
+    public Helpers.CherryPickHelper.JiraTicketInfo? JiraInfo { get; set; }
     public List<MergeRequestInfo> MergeRequests { get; set; } = [];
     public List<CommitInfo> StandaloneCommits { get; set; } = [];
 }

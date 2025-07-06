@@ -15,7 +15,6 @@ public class GitDeploymentCli : IDisposable
     private readonly GitCommandExecutor _gitExecutor;
     private readonly BranchValidator _branchValidator;
     private readonly RepositoryInfoDisplay _repoInfoDisplay;
-    private readonly AnalysisDisplay _analysisDisplay;
 
     public GitDeploymentCli(string repoPath)
     {
@@ -30,7 +29,6 @@ public class GitDeploymentCli : IDisposable
         _gitExecutor = new GitCommandExecutor(repoPath1);
         _branchValidator = new BranchValidator(_repo);
         _repoInfoDisplay = new RepositoryInfoDisplay(repoPath1, GetRepositoryStatus());
-        _analysisDisplay = new AnalysisDisplay();
     }
 
     #region Public API
@@ -48,7 +46,9 @@ public class GitDeploymentCli : IDisposable
             "kiota-lock.json",
             "v1.json",
         };
-        var excludeFiles = options.ExcludeFiles.Any() ? new HashSet<string>(options.ExcludeFiles, StringComparer.OrdinalIgnoreCase) : new HashSet<string>(defaultExcludes, StringComparer.OrdinalIgnoreCase);
+        var excludeFiles = options.ExcludeFiles.Count != 0 ? 
+            new HashSet<string>(options.ExcludeFiles, StringComparer.OrdinalIgnoreCase) : 
+            new HashSet<string>(defaultExcludes, StringComparer.OrdinalIgnoreCase);
 
         try
         {
@@ -66,34 +66,34 @@ public class GitDeploymentCli : IDisposable
 
             _branchValidator.ValidateBranches(options.SourceBranch, options.TargetBranch);
 
-            var analysis = await AnalyzeWithProgressAsync(options.SourceBranch, options.TargetBranch, options.MergeHighlightMode, cts.Token);
+            var analysis = await AnalyzeWithProgressAsync(options.SourceBranch,
+                options.TargetBranch, options.TicketPrefix, cts.Token);
 
-            _analysisDisplay.DisplaySuggestions(analysis, options.TargetBranch);
+            AnalysisDisplay.DisplaySuggestions(analysis, options.TargetBranch);
 
             // HTML Export
-            if (!string.IsNullOrEmpty(options.OutputDir) || analysis.HasContentDifferences)
+            if (string.IsNullOrEmpty(options.OutputDir) && !analysis.HasContentDifferences) 
+                return 0;
+            try
             {
-                try
-                {
-                    var outputDir = options.OutputDir ?? Environment.CurrentDirectory;
-                    var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-                    var filename = $"cherry-pick-analysis_{options.SourceBranch.Replace("/", "_")}_to_{options.TargetBranch.Replace("/", "_")}_{timestamp}.html";
-                    var outputPath = Path.Combine(outputDir, filename);
+                var outputDir = options.OutputDir ?? Environment.CurrentDirectory;
+                var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                var filename = $"cherry-pick-analysis_{options.SourceBranch.Replace("/", "_")}_to_{options.TargetBranch.Replace("/", "_")}_{timestamp}.html";
+                var outputPath = Path.Combine(outputDir, filename);
                     
-                    // Ensure output directory exists
-                    Directory.CreateDirectory(outputDir);
+                // Ensure output directory exists
+                Directory.CreateDirectory(outputDir);
                     
-                    var html = HtmlExportService.GenerateHtml(analysis, options.SourceBranch, options.TargetBranch);
-                    await File.WriteAllTextAsync(outputPath, html, cts.Token);
-                    var fileUrl = $"file:///{outputPath}";
-                    AnsiConsole.MarkupLine("[green]✅ HTML report exported to:[/] ");
-                    AnsiConsole.MarkupLine($"[link={fileUrl}]{Markup.Escape(outputPath)}[/]");
-                    AnsiConsole.WriteLine();
-                } 
-                catch (Exception ex)
-                {
-                    AnsiConsole.WriteException(ex);
-                }
+                var html = HtmlExportService.GenerateHtml(analysis, options.SourceBranch, options.TargetBranch);
+                await File.WriteAllTextAsync(outputPath, html, cts.Token);
+                var fileUrl = $"file:///{outputPath}";
+                AnsiConsole.MarkupLine("[green]✅ HTML report exported to:[/] ");
+                AnsiConsole.MarkupLine($"[link={fileUrl}]{Markup.Escape(outputPath)}[/]");
+                AnsiConsole.WriteLine();
+            } 
+            catch (Exception ex)
+            {
+                AnsiConsole.WriteException(ex);
             }
 
 
@@ -123,7 +123,7 @@ public class GitDeploymentCli : IDisposable
     private async Task<DeploymentAnalysis> AnalyzeWithProgressAsync(
         string sourceBranch,
         string targetBranch,
-        string mergeHighlightMode,
+        string expectedPrefix,
         CancellationToken cancellationToken = default)
     {
         var analysis = new DeploymentAnalysis();
@@ -149,7 +149,10 @@ public class GitDeploymentCli : IDisposable
         if (analysis.HasContentDifferences)
         {
             analysis.ContentAnalysis = await GetDetailedContentAnalysisAsync(
-                sourceBranch, analysis.OutstandingCommits, analysis.CherryPickAnalysis.NewCommits, mergeHighlightMode, cancellationToken);
+                sourceBranch, analysis.OutstandingCommits, 
+                analysis.CherryPickAnalysis.NewCommits, 
+                expectedPrefix,
+                cancellationToken);
         }
 
         return analysis;
@@ -159,7 +162,7 @@ public class GitDeploymentCli : IDisposable
         string sourceBranch,
         List<CommitInfo> outstandingCommits,
         List<CommitInfo> newCherryPickCommits,
-        string mergeHighlightMode,
+        string expectedPrefix,
         CancellationToken cancellationToken = default)
     {
 
@@ -178,18 +181,15 @@ public class GitDeploymentCli : IDisposable
 
         // For ancestry mode: collect merge SHAs in first-parent history of source branch
         var firstParentMerges = new HashSet<string>();
-        if (mergeHighlightMode == "ancestry")
+        var branch = _repo.Branches[sourceBranch];
+        if (branch != null && branch.Tip != null)
         {
-            var branch = _repo.Branches[sourceBranch];
-            if (branch != null && branch.Tip != null)
+            var commit = branch.Tip;
+            while (commit != null)
             {
-                var commit = branch.Tip;
-                while (commit != null)
-                {
-                    if (commit.Parents.Count() > 1)
-                        firstParentMerges.Add(commit.Sha);
-                    commit = commit.Parents.FirstOrDefault();
-                }
+                if (commit.Parents.Count() > 1)
+                    firstParentMerges.Add(commit.Sha);
+                commit = commit.Parents.FirstOrDefault();
             }
         }
 
@@ -200,41 +200,27 @@ public class GitDeploymentCli : IDisposable
             if (commit == null || commit.Parents.Count() <= 1) continue;
 
             // Only consider merge commits in first-parent history for ancestry mode
-            if (mergeHighlightMode == "ancestry" && !firstParentMerges.Contains(commit.Sha))
+            if (!firstParentMerges.Contains(commit.Sha))
                 continue;
 
             var foundCherryPicks = new HashSet<string>();
 
-            if (mergeHighlightMode == "message")
+
+            var queue = new Queue<Commit>(commit.Parents);
+            var depth = 0;
+            while (queue.Count > 0 && depth < 100)
             {
-                // Highlight if commit message contains "into 'sourceBranch'"
-                if (commit.Message.Contains($"into '{sourceBranch}'", StringComparison.OrdinalIgnoreCase))
+                var ancestor = queue.Dequeue();
+                if (cherryPickCommitShas.Contains(ancestor.Sha))
                 {
-                    // For message mode, just check if any cherry-pick commit is in ancestry (direct parents)
-                    foreach (var parent in commit.Parents)
-                    {
-                        if (!cherryPickCommitShas.Contains(parent.Sha)) continue;
-                        foundCherryPicks.Add(parent.Sha);
-                        cherryPicksCoveredByMerge.Add(parent.Sha);
-                    }
+                    foundCherryPicks.Add(ancestor.Sha);
+                    cherryPicksCoveredByMerge.Add(ancestor.Sha);
                 }
-            }
-            else // ancestry (default)
-            {
-                var queue = new Queue<Commit>(commit.Parents);
-                var depth = 0;
-                while (queue.Count > 0 && depth < 100)
-                {
-                    var ancestor = queue.Dequeue();
-                    if (cherryPickCommitShas.Contains(ancestor.Sha))
-                    {
-                        foundCherryPicks.Add(ancestor.Sha);
-                        cherryPicksCoveredByMerge.Add(ancestor.Sha);
-                    }
-                    foreach (var p in ancestor.Parents)
-                        queue.Enqueue(p);
-                    depth++;
-                }
+
+                foreach (var p in ancestor.Parents)
+                    queue.Enqueue(p);
+                depth++;
+
             }
 
             if (foundCherryPicks.Count > 0)
@@ -299,7 +285,7 @@ public class GitDeploymentCli : IDisposable
 
         // Build multi-ticket MR map
         var mergeCommitInfos = commitsToDisplay.Where(c => maximalMerges.ContainsKey(c.Sha)).ToList();
-        var ticketToMrs = CherryPickHelper.BuildMrTicketMap(mergeCommitInfos, outstandingCommits, _repo);
+        var ticketToMrs = CherryPickHelper.BuildMrTicketMap(expectedPrefix,mergeCommitInfos, outstandingCommits, _repo);
 
         // Fetch Jira ticket info for all tickets found in the analysis
         Dictionary<string, CherryPickHelper.JiraTicketInfo> ticketInfos = [];
@@ -369,7 +355,7 @@ public class GitDeploymentCli : IDisposable
 
             foreach (var commit in unmergedCherryPicks)
             {
-                var tickets = CherryPickHelper.ExtractTicketNumbers(commit.Message);
+                var tickets = CherryPickHelper.ExtractTicketNumbers(expectedPrefix,commit.Message);
                 if (tickets.Count != 0)
                 {
                     // Use the first ticket found (or could be more sophisticated)

@@ -9,131 +9,13 @@ using System.Text;
 
 namespace CherryPickAnalyzer.Helpers;
 
-public static class CherryPickHelper
+public static partial class CherryPickHelper
 {
-    public static List<CommitInfo> SelectCommitsInteractively(List<CommitInfo> commits)
+    private static readonly JsonSerializerOptions CachedJsonSerializerOptions = new()
     {
-        var prompt = new MultiSelectionPrompt<CommitInfo>()
-            .Title("Select commits to cherry-pick:")
-            .PageSize(10)
-            .UseConverter(commit => $"{commit.ShortSha} {commit.Message} ({commit.Author})")
-            .AddChoices(commits);
-
-        return AnsiConsole.Prompt(prompt);
-    }
-
-    public static List<string> GenerateCherryPickCommands(string targetBranch, List<CommitInfo> commits)
-    {
-        var commands = new List<string> { $"git checkout {targetBranch}" };
-        commands.AddRange(commits.Select(c => $"git cherry-pick {c.Sha}"));
-        return commands;
-    }
-
-    public static void DisplayCherryPickCommands(List<string> commands)
-    {
-        var table = new Table()
-            .AddColumn("Step")
-            .AddColumn("Command")
-            .BorderColor(Color.Green);
-
-        for (var i = 0; i < commands.Count; i++)
-        {
-            table.AddRow((i + 1).ToString(), $"[dim]{commands[i]}[/]");
-        }
-
-        AnsiConsole.Write(new Panel(table)
-            .Header("🍒 Cherry-pick Commands")
-            .BorderColor(Color.Green));
-    }
-
-    public static List<string> GenerateCherryPickCommandsFromContentAnalysis(string targetBranch, Models.ContentAnalysis contentAnalysis, List<string>? selectedTickets = null)
-    {
-        var commands = new List<string> { $"git checkout {targetBranch}" };
-        var allCherryPickShas = new HashSet<string>();
-
-        foreach (var ticketGroup in contentAnalysis.TicketGroups)
-        {
-            // Skip if specific tickets are selected and this ticket is not in the selection
-            if (selectedTickets != null && !selectedTickets.Contains(ticketGroup.TicketNumber))
-                continue;
-
-            // Add merge commit SHAs (these represent the MRs)
-            foreach (var mrInfo in ticketGroup.MergeRequests)
-            {
-                allCherryPickShas.Add(mrInfo.MergeCommit.Sha);
-            }
-
-            // Add standalone commit SHAs
-            foreach (var commit in ticketGroup.StandaloneCommits)
-            {
-                allCherryPickShas.Add(commit.Sha);
-            }
-        }
-
-        // Generate cherry-pick commands in chronological order
-        var sortedCommits = allCherryPickShas
-            .Select(sha => contentAnalysis.TicketGroups
-                .SelectMany(g => g.MergeRequests.Select(mr => mr.MergeCommit).Concat(g.StandaloneCommits))
-                .FirstOrDefault(c => c.Sha == sha))
-            .Where(c => c != null)
-            .OrderBy(c => c!.Date)
-            .ToList();
-
-        commands.AddRange(sortedCommits.Select(c => $"git cherry-pick {c!.Sha}"));
-        return commands;
-    }
-
-    public static void DisplayTicketBasedCherryPickCommands(string targetBranch, Models.ContentAnalysis contentAnalysis, List<string>? selectedTickets = null)
-    {
-        var commands = GenerateCherryPickCommandsFromContentAnalysis(targetBranch, contentAnalysis, selectedTickets);
-        
-        var table = new Table()
-            .AddColumn("Step")
-            .AddColumn("Command")
-            .AddColumn("Ticket")
-            .AddColumn("Status")
-            .BorderColor(Color.Green);
-
-        var step = 1;
-        table.AddRow(step++.ToString(), $"[dim]git checkout {targetBranch}[/]", "", "");
-
-        foreach (var ticketGroup in contentAnalysis.TicketGroups)
-        {
-            // Skip if specific tickets are selected and this ticket is not in the selection
-            if (selectedTickets != null && !selectedTickets.Contains(ticketGroup.TicketNumber))
-                continue;
-
-            var ticketStatus = ticketGroup.JiraInfo?.Status ?? "Unknown";
-            var statusIcon = GetStatusIcon(ticketStatus);
-
-            // Add merge commits
-            foreach (var mrInfo in ticketGroup.MergeRequests)
-            {
-                table.AddRow(
-                    step++.ToString(),
-                    $"[dim]git cherry-pick {mrInfo.MergeCommit.ShortSha}[/]",
-                    $"[yellow]{ticketGroup.TicketNumber}[/]",
-                    $"[{GetStatusColor(ticketStatus)}]{statusIcon} {ticketStatus}[/]"
-                );
-            }
-
-            // Add standalone commits
-            foreach (var commit in ticketGroup.StandaloneCommits)
-            {
-                table.AddRow(
-                    step++.ToString(),
-                    $"[dim]git cherry-pick {commit.ShortSha}[/]",
-                    $"[yellow]{ticketGroup.TicketNumber}[/]",
-                    $"[{GetStatusColor(ticketStatus)}]{statusIcon} {ticketStatus}[/]"
-                );
-            }
-        }
-
-        AnsiConsole.Write(new Panel(table)
-            .Header("🍒 Ticket-Based Cherry-pick Commands")
-            .BorderColor(Color.Green));
-    }
-
+        WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
+    
     private static string GetStatusIcon(string status)
     {
         return status.ToLower() switch
@@ -148,34 +30,20 @@ public static class CherryPickHelper
         };
     }
 
-    private static string GetStatusColor(string status)
-    {
-        return status.ToLower() switch
-        {
-            "to do" => "blue",
-            "in progress" => "yellow",
-            "pending prod deployment" => "red",
-            "prod deployed" => "green",
-            "done" => "green",
-            "closed" => "grey",
-            _ => "white"
-        };
-    }
-
     /// <summary>
     /// Extracts ticket numbers from commit messages using various HSAMED formats.
     /// Use this method to get all ticket keys for Jira lookups.
     /// </summary>
+    /// <param name="expectedPrefix">HSAMED</param>
     /// <param name="message">The commit message to extract tickets from</param>
     /// <returns>List of unique ticket numbers found in the message</returns>
-    public static List<string> ExtractTicketNumbers(string message)
+    public static List<string> ExtractTicketNumbers(string expectedPrefix, string message)
     {
         if (string.IsNullOrWhiteSpace(message))
             return [];
 
         var tickets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var expectedPrefix = "HSAMED";
-        var minSimilarity = 85;
+        const int minSimilarity = 85;
 
         // Regex patterns for possible ticket formats (including typos)
         var patterns = new[]
@@ -193,70 +61,19 @@ public static class CherryPickHelper
                 var raw = match.Value.ToUpperInvariant().Replace("[", "").Replace("]", "").Replace(" ", "-");
                 // Split prefix and number
                 var dashIdx = raw.IndexOf('-');
-                if (dashIdx > 0)
-                {
-                    var prefix = raw.Substring(0, dashIdx);
-                    var number = raw.Substring(dashIdx + 1);
-                    // Fuzzy match prefix to expected
-                    var sim = Fuzz.Ratio(prefix, expectedPrefix);
-                    if (sim >= minSimilarity)
-                    {
-                        var ticket = $"{expectedPrefix}-{number}";
-                        tickets.Add(ticket);
-                    }
-                }
+                if (dashIdx <= 0) continue;
+                var prefix = raw[..dashIdx];
+                var number = raw[(dashIdx + 1)..];
+                // Fuzzy match prefix to expected
+                var sim = Fuzz.Ratio(prefix, expectedPrefix);
+                if (sim < minSimilarity) continue;
+                var ticket = $"{expectedPrefix}-{number}";
+                tickets.Add(ticket);
             }
         }
         return [.. tickets.OrderBy(t => t)];
     }
 
-    /// <summary>
-    /// Returns the set of commit SHAs that are part of a merge request (MR), i.e., reachable from the feature branch parent but not from the target branch parent.
-    /// </summary>
-    /// <param name="repo">The repository</param>
-    /// <param name="mergeCommit">The merge commit (MR)</param>
-    /// <param name="maxDepth">Maximum ancestry depth to walk</param>
-    /// <returns>Set of commit SHAs that are part of the MR</returns>
-    public static HashSet<string> GetCommitsInMergeRequest(Repository repo, Commit mergeCommit, int maxDepth = 500)
-    {
-        if (mergeCommit.Parents.Count() < 2)
-            return [];
-
-        var parent1 = mergeCommit.Parents.ElementAt(0); // target branch tip before merge
-        var parent2 = mergeCommit.Parents.ElementAt(1); // feature branch tip at merge
-
-        // Walk ancestry of parent1 (target branch) to build exclusion set
-        var targetAncestors = new HashSet<string>();
-        var queue = new Queue<Commit>();
-        queue.Enqueue(parent1);
-        var depth = 0;
-        while (queue.Count > 0 && depth < maxDepth)
-        {
-            var c = queue.Dequeue();
-            if (!targetAncestors.Add(c.Sha)) continue;
-            foreach (var p in c.Parents)
-                queue.Enqueue(p);
-            depth++;
-        }
-
-        // Walk ancestry of parent2 (feature branch) to build inclusion set
-        var featureAncestors = new HashSet<string>();
-        queue.Clear();
-        queue.Enqueue(parent2);
-        depth = 0;
-        while (queue.Count > 0 && depth < maxDepth)
-        {
-            var c = queue.Dequeue();
-            if (!featureAncestors.Add(c.Sha)) continue;
-            foreach (var p in c.Parents)
-                queue.Enqueue(p);
-            depth++;
-        }
-
-        // MR commits = featureAncestors - targetAncestors
-        featureAncestors.ExceptWith(targetAncestors);
-        return featureAncestors;
-    }
 
     /// <summary>
     /// Returns the list of commits on the first-parent path from the feature branch tip (parent2) to the merge base with the target branch (parent1).
@@ -266,7 +83,7 @@ public static class CherryPickHelper
     /// <returns>List of commits (most recent first) that are directly part of the MR</returns>
     public static List<Commit> GetMRCommitsFirstParentOnly(Repository repo, Commit mergeCommit)
     {
-        if (mergeCommit == null || mergeCommit.Parents.Count() < 2)
+        if (mergeCommit.Parents.Count() < 2)
             return [];
 
         var parent1 = mergeCommit.Parents.ElementAt(0); // target branch tip before merge
@@ -306,6 +123,7 @@ public static class CherryPickHelper
     }
 
     public static Dictionary<string, List<MrTicketInfo>> BuildMrTicketMap(
+        string expectedPrefix,
         List<CommitInfo> mergeCommits,
         List<CommitInfo> outstandingCommits,
         Repository repo)
@@ -313,13 +131,13 @@ public static class CherryPickHelper
         var ticketToMrs = new Dictionary<string, List<MrTicketInfo>>(StringComparer.OrdinalIgnoreCase);
         foreach (var mergeCommit in mergeCommits)
         {
-            var mergeCommitObj = repo.Lookup<LibGit2Sharp.Commit>(mergeCommit.Sha);
+            var mergeCommitObj = repo.Lookup<Commit>(mergeCommit.Sha);
             if (mergeCommitObj == null) continue;
             var mrCommits = GetMRCommitsFirstParentOnlyNonMerges(repo, mergeCommitObj);
             // Collect all tickets from MR and its commits
             var tickets = new List<string>();
-            tickets.AddRange(ExtractTicketNumbers(mergeCommit.Message));
-            tickets.AddRange(mrCommits.SelectMany(c => ExtractTicketNumbers(c.Message)));
+            tickets.AddRange(ExtractTicketNumbers(expectedPrefix,mergeCommit.Message));
+            tickets.AddRange(mrCommits.SelectMany(c => ExtractTicketNumbers(expectedPrefix,c.Message)));
             // Fuzzy-correct all tickets
             var mrKnownTickets = tickets.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             var correctedTickets = tickets
@@ -337,7 +155,7 @@ public static class CherryPickHelper
                 correctedTickets.Add("No Ticket");
             var info = new MrTicketInfo
             {
-                MergeCommitSha = mergeCommit.Sha ?? string.Empty,
+                MergeCommitSha = mergeCommit.Sha,
                 Tickets = correctedTickets,
                 MrCommits = [.. mrCommits
                     .Select(c => outstandingCommits.FirstOrDefault(ci => ci.Sha == c.Sha))
@@ -359,7 +177,6 @@ public static class CherryPickHelper
         public string JiraBaseUrl { get; set; } = "";
         public string JiraUsername { get; set; } = "";
         public string JiraApiToken { get; set; } = "";
-        public string JiraDefaultProject { get; set; } = "";
     }
 
     public class JiraTicketInfo
@@ -367,16 +184,6 @@ public static class CherryPickHelper
         public string Key { get; set; } = "";
         public string Status { get; set; } = "";
         public string Summary { get; set; } = "";
-    }
-
-    public static JiraConfig LoadJiraConfig()
-    {
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var configPath = Path.Combine(home, ".cherrypickanalyzer", "jira.json");
-        if (!File.Exists(configPath))
-            throw new FileNotFoundException($"Jira config not found at {configPath}");
-        var json = File.ReadAllText(configPath);
-        return JsonSerializer.Deserialize<JiraConfig>(json) ?? new JiraConfig();
     }
 
     public static JiraConfig LoadOrCreateJiraConfig()
@@ -395,42 +202,39 @@ public static class CherryPickHelper
         return PromptForJiraConfig(configDir, configPath);
     }
 
+
     private static JiraConfig PromptForJiraConfig(string configDir, string configPath)
     {
         AnsiConsole.WriteLine("Jira configuration not found. Please provide your Jira credentials:");
         AnsiConsole.WriteLine();
-        
+
         AnsiConsole.Write("Jira Base URL (e.g., https://yourcompany.atlassian.net): ");
         var baseUrl = Console.ReadLine()?.Trim();
         if (string.IsNullOrEmpty(baseUrl))
             throw new InvalidOperationException("Jira Base URL is required");
-        
+
         AnsiConsole.Write("Jira Username (email): ");
         var username = Console.ReadLine()?.Trim();
         if (string.IsNullOrEmpty(username))
             throw new InvalidOperationException("Jira Username is required");
-        
+
         AnsiConsole.Write("Jira API Token: ");
         var apiToken = ReadPassword();
         if (string.IsNullOrEmpty(apiToken))
             throw new InvalidOperationException("Jira API Token is required");
-        
-        AnsiConsole.Write("Default Jira Project Key (e.g., HSAMED): ");
-        var defaultProject = Console.ReadLine()?.Trim() ?? "";
-        
+
         var config = new JiraConfig
         {
             JiraBaseUrl = baseUrl,
             JiraUsername = username,
             JiraApiToken = apiToken,
-            JiraDefaultProject = defaultProject
         };
-        
+
         // Save config
         Directory.CreateDirectory(configDir);
-        var json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
+        var json = JsonSerializer.Serialize(config, CachedJsonSerializerOptions);
         File.WriteAllText(configPath, json);
-        
+
         AnsiConsole.WriteLine($"Configuration saved to {configPath}");
         return config;
     }
@@ -450,25 +254,6 @@ public static class CherryPickHelper
         }
         Console.WriteLine();
         return password.ToString();
-    }
-
-    public static async Task<JiraTicketInfo?> FetchJiraTicketAsync(string ticketKey, JiraConfig config)
-    {
-        using var client = new HttpClient();
-        var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{config.JiraUsername}:{config.JiraApiToken}"));
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
-        var url = $"{config.JiraBaseUrl}/rest/api/2/issue/{ticketKey}";
-        var response = await client.GetAsync(url);
-        if (!response.IsSuccessStatusCode) return null;
-        var json = await response.Content.ReadAsStringAsync();
-        using var doc = JsonDocument.Parse(json);
-        var fields = doc.RootElement.GetProperty("fields");
-        return new JiraTicketInfo
-        {
-            Key = ticketKey,
-            Status = fields.GetProperty("status").GetProperty("name").GetString() ?? "",
-            Summary = fields.GetProperty("summary").GetString() ?? ""
-        };
     }
 
     public static async Task<Dictionary<string, JiraTicketInfo>> FetchJiraTicketsBulkAsync(List<string> ticketKeys, JiraConfig config)
@@ -515,7 +300,7 @@ public static class CherryPickHelper
         return result;
     }
 
-    public static List<string> SelectTicketsInteractively(Models.ContentAnalysis contentAnalysis)
+    public static List<string> SelectTicketsInteractively(ContentAnalysis contentAnalysis)
     {
         AnsiConsole.WriteLine();
         AnsiConsole.Write(new Rule("Interactive Ticket Selection").RuleStyle("blue"));
@@ -537,7 +322,7 @@ public static class CherryPickHelper
         var noTicketGroup = contentAnalysis.TicketGroups.FirstOrDefault(tg => tg.TicketNumber == "No Ticket");
         if (noTicketGroup != null)
         {
-            statusOptions.Add($"❓ No Ticket (1 group)");
+            statusOptions.Add("❓ No Ticket (1 group)");
         }
 
         var selectedTickets = new List<string>();
@@ -605,10 +390,13 @@ public static class CherryPickHelper
                         {
                             // Status-based selection
                             var matchingTickets = contentAnalysis.TicketGroups
-                                .Where(tg => tg.TicketNumber != "No Ticket" && (tg.JiraInfo?.Status ?? "Unknown") == statusChoice.StatusName);
+                                .Where(tg =>
+                                    tg.TicketNumber != "No Ticket" &&
+                                    (tg.JiraInfo?.Status ?? "Unknown") == statusChoice.StatusName)
+                                .ToArray();
                         
                             AnsiConsole.MarkupLine($"    [dim]Looking for tickets with status: '{statusChoice.StatusName}'[/]");
-                            AnsiConsole.MarkupLine($"    [dim]Found {matchingTickets.Count()} matching tickets[/]");
+                            AnsiConsole.MarkupLine($"    [dim]Found {matchingTickets.Length} matching tickets[/]");
                         
                             foreach (var ticketGroup in matchingTickets)
                             {
@@ -616,7 +404,7 @@ public static class CherryPickHelper
                                 AnsiConsole.MarkupLine($"    → Added ticket: {ticketGroup.TicketNumber}");
                             }
                         
-                            if (!matchingTickets.Any())
+                            if (matchingTickets.Length == 0)
                             {
                                 AnsiConsole.MarkupLine($"    [yellow]⚠️  No tickets found with status '{statusChoice.StatusName}'[/]");
                                 // Debug: show all available statuses
@@ -647,13 +435,13 @@ public static class CherryPickHelper
                     var ticketId = tg.TicketNumber == "No Ticket" ? $"NO-TICKET-{Guid.NewGuid():N}" : tg.TicketNumber;
                     var statusIcon = GetStatusIcon(tg.JiraInfo?.Status ?? "Unknown");
                     var summary = tg.JiraInfo?.Summary ?? "";
-                    if (summary.Length > 40) summary = summary.Substring(0, 37) + "...";
+                    if (summary.Length > 40) summary = summary[..37] + "...";
                 
                     var displayText = tg.TicketNumber == "No Ticket" 
                         ? $"{statusIcon} {ticketId} | {tg.MergeRequests.Count} MRs, {tg.StandaloneCommits.Count} standalone"
                         : $"{statusIcon} {Markup.Escape(tg.TicketNumber)} | {Markup.Escape(tg.JiraInfo?.Status ?? "Unknown")} | {Markup.Escape(summary)} | {tg.MergeRequests.Count} MRs, {tg.StandaloneCommits.Count} standalone";
                 
-                    return new TicketChoice { TicketGroup = tg, DisplayText = displayText, TicketId = ticketId };
+                    return new TicketChoice { DisplayText = displayText, TicketId = ticketId };
                 }).ToList();
 
                 var prompt = new MultiSelectionPrompt<TicketChoice>()
@@ -669,49 +457,42 @@ public static class CherryPickHelper
         }
 
         // Step 3: Show dependencies and confirm selection
-        if (selectedTickets.Count != 0)
+        if (selectedTickets.Count == 0) return selectedTickets;
+        var dependencies = FindDependencies(contentAnalysis, selectedTickets);
+        if (dependencies.Count == 0) return selectedTickets;
+        AnsiConsole.WriteLine();
+        AnsiConsole.Write(new Panel(
+            "The following dependent tickets will also be included:\n" +
+            string.Join("\n", dependencies.Select(d => $"• {d}"))
+        ).BorderColor(Color.Yellow));
+
+        var includeDependencies = AnsiConsole.Confirm("Include dependent tickets?");
+        if (includeDependencies)
         {
-            var dependencies = FindDependencies(contentAnalysis, selectedTickets);
-            if (dependencies.Count != 0)
-            {
-                AnsiConsole.WriteLine();
-                AnsiConsole.Write(new Panel(
-                    $"The following dependent tickets will also be included:\n" +
-                    string.Join("\n", dependencies.Select(d => $"• {d}"))
-                ).BorderColor(Color.Yellow));
-
-                var includeDependencies = AnsiConsole.Confirm("Include dependent tickets?", true);
-                if (includeDependencies)
-                {
-                    selectedTickets.AddRange(dependencies);
-                    selectedTickets = [.. selectedTickets.Distinct()];
-                }
-
-                // Display final selection summary
-                AnsiConsole.WriteLine();
-                AnsiConsole.Write(new Panel(
-                    $"Selected {selectedTickets.Count} tickets for cherry-pick:\n" +
-                    string.Join("\n", selectedTickets.Select(t => $"• {t}"))
-                ).BorderColor(Color.Green));
-            }
-
-            
+            selectedTickets.AddRange(dependencies);
+            selectedTickets = [.. selectedTickets.Distinct()];
         }
+
+        // Display final selection summary
+        AnsiConsole.WriteLine();
+        AnsiConsole.Write(new Panel(
+            $"Selected {selectedTickets.Count} tickets for cherry-pick:\n" +
+            string.Join("\n", selectedTickets.Select(t => $"• {t}"))
+        ).BorderColor(Color.Green));
 
         return selectedTickets;
     }
 
     private class TicketChoice
     {
-        public Models.TicketGroup TicketGroup { get; set; } = new();
-        public string DisplayText { get; set; } = "";
-        public string TicketId { get; set; } = "";
+        public string DisplayText { get; init; } = "";
+        public string TicketId { get; init; } = "";
     }
 
     private class StatusChoice
     {
-        public string StatusName { get; set; } = "";
-        public string DisplayText { get; set; } = "";
+        public string StatusName { get; init; } = "";
+        public string DisplayText { get; init; } = "";
     }
 
     private static bool IsReadyForDeployment(string? status)
@@ -728,7 +509,7 @@ public static class CherryPickHelper
         };
     }
 
-    private static List<string> FindDependencies(Models.ContentAnalysis contentAnalysis, List<string> selectedTickets)
+    private static List<string> FindDependencies(ContentAnalysis contentAnalysis, List<string> selectedTickets)
     {
         var dependencies = new HashSet<string>();
         
@@ -747,7 +528,7 @@ public static class CherryPickHelper
                 if (summary.Contains("depends on") || summary.Contains("blocked by"))
                 {
                     // Extract potential ticket references
-                    var ticketMatches = Regex.Matches(summary, @"[A-Z]{2,}-\d+");
+                    var ticketMatches = TicketKeyRegex().Matches(summary);
                     foreach (Match match in ticketMatches)
                     {
                         var depTicket = match.Value;
@@ -777,4 +558,7 @@ public static class CherryPickHelper
             _ => 50
         };
     }
+
+    [GeneratedRegex(@"[A-Za-z]{2,}-\d+")]
+    private static partial Regex TicketKeyRegex();
 }

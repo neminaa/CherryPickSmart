@@ -2,15 +2,8 @@ using LibGit2Sharp;
 
 namespace CherryPickAnalyzer.Core;
 
-public class BranchValidator
+public class BranchValidator(Repository repo)
 {
-    private readonly Repository _repo;
-
-    public BranchValidator(Repository repo)
-    {
-        _repo = repo;
-    }
-
     public void ValidateBranches(string sourceBranch, string targetBranch)
     {
         var source = GetBranch(sourceBranch);
@@ -24,7 +17,7 @@ public class BranchValidator
 
     public Branch GetBranch(string branchName)
     {
-        return _repo.Branches[branchName] ??
-               _repo.Branches[$"origin/{branchName}"];
+        return repo.Branches[branchName] ??
+               repo.Branches[$"origin/{branchName}"];
     }
 }

@@ -3,21 +3,12 @@ using Spectre.Console;
 
 namespace CherryPickAnalyzer.Display;
 
-public class RepositoryInfoDisplay
+public class RepositoryInfoDisplay(string repoPath, RepositoryStatus status)
 {
-    private readonly string _repoPath;
-    private readonly RepositoryStatus _status;
-
-    public RepositoryInfoDisplay(string repoPath, RepositoryStatus status)
-    {
-        _repoPath = repoPath;
-        _status = status;
-    }
-
     public void DisplayRepositoryInfo(string currentBranch, IEnumerable<string> remotes)
     {
         var panel = new Panel(new Markup($"""
-            [bold]Repository:[/] {_repoPath}
+            [bold]Repository:[/] {repoPath}
             [bold]Current Branch:[/] {currentBranch}
             [bold]Remotes:[/] {string.Join(", ", remotes)}
             """))
@@ -29,7 +20,7 @@ public class RepositoryInfoDisplay
 
     public void DisplayRepositoryStatus()
     {
-        if (!_status.HasUncommittedChanges)
+        if (!status.HasUncommittedChanges)
         {
             AnsiConsole.MarkupLine("[green]✅ Working directory clean[/]");
             return;
@@ -40,22 +31,22 @@ public class RepositoryInfoDisplay
             .AddColumn("Files")
             .BorderColor(Color.Yellow);
 
-        if (_status.ModifiedFiles.Count != 0)
+        if (status.ModifiedFiles.Count != 0)
         {
-            table.AddRow("🔄 Modified", string.Join(", ", _status.ModifiedFiles.Take(5)) +
-                        (_status.ModifiedFiles.Count > 5 ? $" and {_status.ModifiedFiles.Count - 5} more..." : ""));
+            table.AddRow("🔄 Modified", string.Join(", ", status.ModifiedFiles.Take(5)) +
+                        (status.ModifiedFiles.Count > 5 ? $" and {status.ModifiedFiles.Count - 5} more..." : ""));
         }
 
-        if (_status.StagedFiles.Count != 0)
+        if (status.StagedFiles.Count != 0)
         {
-            table.AddRow("📝 Staged", string.Join(", ", _status.StagedFiles.Take(5)) +
-                        (_status.StagedFiles.Count > 5 ? $" and {_status.StagedFiles.Count - 5} more..." : ""));
+            table.AddRow("📝 Staged", string.Join(", ", status.StagedFiles.Take(5)) +
+                        (status.StagedFiles.Count > 5 ? $" and {status.StagedFiles.Count - 5} more..." : ""));
         }
 
-        if (_status.UntrackedFiles.Count != 0)
+        if (status.UntrackedFiles.Count != 0)
         {
-            table.AddRow("❓ Untracked", string.Join(", ", _status.UntrackedFiles.Take(5)) +
-                        (_status.UntrackedFiles.Count > 5 ? $" and {_status.UntrackedFiles.Count - 5} more..." : ""));
+            table.AddRow("❓ Untracked", string.Join(", ", status.UntrackedFiles.Take(5)) +
+                        (status.UntrackedFiles.Count > 5 ? $" and {status.UntrackedFiles.Count - 5} more..." : ""));
         }
 
         AnsiConsole.Write(new Panel(table)

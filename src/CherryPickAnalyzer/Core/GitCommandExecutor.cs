@@ -5,16 +5,11 @@ using Spectre.Console;
 
 namespace CherryPickAnalyzer.Core;
 
-public class GitCommandExecutor
+public class GitCommandExecutor(string repoPath)
 {
-    private readonly Command _gitCommand;
-
-    public GitCommandExecutor(string repoPath)
-    {
-        _gitCommand = Cli.Wrap("git")
-            .WithWorkingDirectory(repoPath)
-            .WithValidation(CommandResultValidation.None);
-    }
+    private readonly Command _gitCommand = Cli.Wrap("git")
+        .WithWorkingDirectory(repoPath)
+        .WithValidation(CommandResultValidation.None);
 
     public async Task FetchWithProgressAsync(string remote, CancellationToken cancellationToken)
     {
@@ -95,31 +90,5 @@ public class GitCommandExecutor
             .ExecuteBufferedAsync(ct);
 
         return result.ExitCode != 0;
-    }
-
-    public async Task<int> ExecuteCherryPickCommandsAsync(List<string> commands)
-    {
-        var confirm = await AnsiConsole.ConfirmAsync("Execute these commands?");
-        if (!confirm) return 0;
-
-        foreach (var command in commands)
-        {
-            AnsiConsole.MarkupLine($"[dim]Executing:[/] {command}");
-
-            var parts = command.Split(' ', 2);
-            var result = await _gitCommand
-                .WithArguments(parts[1])
-                .ExecuteBufferedAsync();
-
-            if (result.ExitCode != 0)
-            {
-                AnsiConsole.MarkupLine($"[red]❌ Command failed:[/] {result.StandardError}");
-                return 1;
-            }
-
-            AnsiConsole.MarkupLine("[green]✅ Success[/]");
-        }
-
-        return 0;
     }
 }

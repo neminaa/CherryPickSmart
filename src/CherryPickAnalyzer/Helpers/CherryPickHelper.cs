@@ -546,11 +546,9 @@ public static class CherryPickHelper
         // Step 1: Selection method
         var selectionMethod = AnsiConsole.Prompt(
             new SelectionPrompt<string>()
-                .Title("Select tickets by status (or choose 'Manual Selection' for individual tickets):")
+                .Title("Choose selection method:")
                 .PageSize(15)
-                .AddChoices(new[] { "Manual Selection" }
-                    .Concat(statusOptions)
-                    .Concat(new[] { "Select All", "Select Ready for Deployment", "Skip Selection" }))
+                .AddChoices(new[] { "Select by Status", "Manual Selection", "Select All", "Select Ready for Deployment", "Skip Selection" })
         );
 
         if (selectionMethod == "Skip Selection")
@@ -571,7 +569,48 @@ public static class CherryPickHelper
                 .ToList();
         }
 
-        if (selectionMethod == "Manual Selection")
+        if (selectionMethod == "Select by Status")
+        {
+            // Step 2: Multi-status selection
+            var statusChoices = statusOptions.Select(status => 
+            {
+                var statusName = status.Substring(status.IndexOf(' ') + 1, status.IndexOf('(') - status.IndexOf(' ') - 1);
+                return new StatusChoice { StatusName = statusName, DisplayText = status };
+            }).ToList();
+
+            var statusPrompt = new MultiSelectionPrompt<StatusChoice>()
+                .Title("Select one or more statuses:")
+                .PageSize(15)
+                .UseConverter(item => item.DisplayText)
+                .AddChoices(statusChoices);
+
+            var selectedStatuses = AnsiConsole.Prompt(statusPrompt);
+            
+            if (selectedStatuses.Any())
+            {
+                foreach (var statusChoice in selectedStatuses)
+                {
+                    if (statusChoice.StatusName == "No Ticket")
+                    {
+                        // Select "No Ticket" group
+                        var ticketId = $"NO-TICKET-{Guid.NewGuid():N}";
+                        selectedTickets.Add(ticketId);
+                    }
+                    else
+                    {
+                        // Status-based selection
+                        var matchingTickets = contentAnalysis.TicketGroups
+                            .Where(tg => tg.TicketNumber != "No Ticket" && (tg.JiraInfo?.Status ?? "Unknown") == statusChoice.StatusName);
+                        
+                        foreach (var ticketGroup in matchingTickets)
+                        {
+                            selectedTickets.Add(ticketGroup.TicketNumber);
+                        }
+                    }
+                }
+            }
+        }
+        else if (selectionMethod == "Manual Selection")
         {
             // Step 2: Manual ticket selection
             var ticketChoices = contentAnalysis.TicketGroups.Select(tg => 
@@ -596,24 +635,6 @@ public static class CherryPickHelper
 
             var selectedItems = AnsiConsole.Prompt(prompt);
             selectedTickets.AddRange(selectedItems.Select(item => item.TicketId));
-        }
-        else if (selectionMethod.Contains("No Ticket"))
-        {
-            // Select "No Ticket" group
-            var ticketId = $"NO-TICKET-{Guid.NewGuid():N}";
-            selectedTickets.Add(ticketId);
-        }
-        else
-        {
-            // Status-based selection
-            var selectedStatus = selectionMethod.Substring(selectionMethod.IndexOf(' ') + 1, selectionMethod.IndexOf('(') - selectionMethod.IndexOf(' ') - 1);
-            var matchingTickets = contentAnalysis.TicketGroups
-                .Where(tg => tg.TicketNumber != "No Ticket" && (tg.JiraInfo?.Status ?? "Unknown") == selectedStatus);
-            
-            foreach (var ticketGroup in matchingTickets)
-            {
-                selectedTickets.Add(ticketGroup.TicketNumber);
-            }
         }
 
         // Step 3: Show dependencies and confirm selection
@@ -652,6 +673,12 @@ public static class CherryPickHelper
         public Models.TicketGroup TicketGroup { get; set; } = new();
         public string DisplayText { get; set; } = "";
         public string TicketId { get; set; } = "";
+    }
+
+    private class StatusChoice
+    {
+        public string StatusName { get; set; } = "";
+        public string DisplayText { get; set; } = "";
     }
 
     private static bool IsReadyForDeployment(string? status)

@@ -574,7 +574,7 @@ public static class CherryPickHelper
             // Step 2: Multi-status selection
             var statusChoices = statusOptions.Select(status => 
             {
-                var statusName = status.Substring(status.IndexOf(' ') + 1, status.IndexOf('(') - status.IndexOf(' ') - 1);
+                var statusName = status.Substring(status.IndexOf(' ') + 1, status.IndexOf('(') - status.IndexOf(' ') - 1).Trim();
                 return new StatusChoice { StatusName = statusName, DisplayText = status };
             }).ToList();
 

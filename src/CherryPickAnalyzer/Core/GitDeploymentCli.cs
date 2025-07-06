@@ -421,20 +421,62 @@ public class GitDeploymentCli : IDisposable
             analysis.TicketGroups.Add(ticketGroup);
         }
 
-        // Add standalone cherry-pick commits (not covered by any merge) to "No Ticket" group
+        // Process standalone cherry-pick commits (not covered by any merge) and group them by ticket
         var unmergedCherryPicks = newCherryPickCommits
             .Where(c => !cherryPicksCoveredByMerge.Contains(c.Sha))
             .ToList();
 
         if (unmergedCherryPicks.Any())
         {
-            var noTicketGroup = analysis.TicketGroups.FirstOrDefault(g => g.TicketNumber == "No Ticket");
-            if (noTicketGroup == null)
+            // Group standalone commits by their ticket numbers
+            var standaloneByTicket = new Dictionary<string, List<CommitInfo>>(StringComparer.OrdinalIgnoreCase);
+            var noTicketCommits = new List<CommitInfo>();
+
+            foreach (var commit in unmergedCherryPicks)
             {
-                noTicketGroup = new TicketGroup { TicketNumber = "No Ticket" };
-                analysis.TicketGroups.Add(noTicketGroup);
+                var tickets = CherryPickHelper.ExtractTicketNumbers(commit.Message);
+                if (tickets.Any())
+                {
+                    // Use the first ticket found (or could be more sophisticated)
+                    var primaryTicket = tickets.First();
+                    if (!standaloneByTicket.ContainsKey(primaryTicket))
+                        standaloneByTicket[primaryTicket] = [];
+                    standaloneByTicket[primaryTicket].Add(commit);
+                }
+                else
+                {
+                    noTicketCommits.Add(commit);
+                }
             }
-            noTicketGroup.StandaloneCommits.AddRange(unmergedCherryPicks);
+
+            // Add standalone commits to their respective ticket groups
+            foreach (var (ticketNumber, commits) in standaloneByTicket)
+            {
+                var existingGroup = analysis.TicketGroups.FirstOrDefault(g => g.TicketNumber == ticketNumber);
+                if (existingGroup == null)
+                {
+                    // Create new ticket group for standalone commits
+                    existingGroup = new TicketGroup 
+                    { 
+                        TicketNumber = ticketNumber,
+                        JiraInfo = ticketInfos.GetValueOrDefault(ticketNumber)
+                    };
+                    analysis.TicketGroups.Add(existingGroup);
+                }
+                existingGroup.StandaloneCommits.AddRange(commits);
+            }
+
+            // Add truly no-ticket commits to "No Ticket" group
+            if (noTicketCommits.Any())
+            {
+                var noTicketGroup = analysis.TicketGroups.FirstOrDefault(g => g.TicketNumber == "No Ticket");
+                if (noTicketGroup == null)
+                {
+                    noTicketGroup = new TicketGroup { TicketNumber = "No Ticket" };
+                    analysis.TicketGroups.Add(noTicketGroup);
+                }
+                noTicketGroup.StandaloneCommits.AddRange(noTicketCommits);
+            }
         }
 
         // Create tree for ticket-centric display with Jira info

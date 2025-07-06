@@ -548,129 +548,126 @@ public static class CherryPickHelper
             new SelectionPrompt<string>()
                 .Title("Choose selection method:")
                 .PageSize(15)
-                .AddChoices(new[] { "Select by Status", "Manual Selection", "Select All", "Select Ready for Deployment", "Skip Selection" })
+                .AddChoices("Select by Status", "Manual Selection", "Select All", "Select Ready for Deployment", "Skip Selection")
         );
 
-        if (selectionMethod == "Skip Selection")
+        switch (selectionMethod)
         {
-            return [];
-        }
-
-        if (selectionMethod == "Select All")
-        {
-            return contentAnalysis.TicketGroups.Select(tg => tg.TicketNumber).ToList();
-        }
-
-        if (selectionMethod == "Select Ready for Deployment")
-        {
-            return contentAnalysis.TicketGroups
-                .Where(tg => IsReadyForDeployment(tg.JiraInfo?.Status))
-                .Select(tg => tg.TicketNumber)
-                .ToList();
-        }
-
-        if (selectionMethod == "Select by Status")
-        {
-            // Step 2: Multi-status selection
-            var statusChoices = statusOptions.Select(status => 
+            case "Skip Selection":
+                return [];
+            case "Select All":
+                return contentAnalysis.TicketGroups.Select(tg => tg.TicketNumber).ToList();
+            case "Select Ready for Deployment":
+                return contentAnalysis.TicketGroups
+                    .Where(tg => IsReadyForDeployment(tg.JiraInfo?.Status))
+                    .Select(tg => tg.TicketNumber)
+                    .ToList();
+            case "Select by Status":
             {
-                var statusName = status.Substring(status.IndexOf(' ') + 1, status.IndexOf('(') - status.IndexOf(' ') - 1).Trim();
-                return new StatusChoice { StatusName = statusName, DisplayText = status };
-            }).ToList();
-
-            AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("[blue]Available statuses:[/]");
-            foreach (var choice in statusChoices)
-            {
-                AnsiConsole.MarkupLine($"  {choice.DisplayText}");
-            }
-            AnsiConsole.WriteLine();
-
-            var statusPrompt = new MultiSelectionPrompt<StatusChoice>()
-                .Title("Select one or more statuses (use SPACE to select, ENTER to confirm):")
-                .PageSize(15)
-                .UseConverter(item => item.DisplayText)
-                .AddChoices(statusChoices);
-
-            var selectedStatuses = AnsiConsole.Prompt(statusPrompt);
-            
-            AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine($"[green]Selected {selectedStatuses.Count} status(es):[/]");
-            
-            if (selectedStatuses.Any())
-            {
-                foreach (var statusChoice in selectedStatuses)
+                // Step 2: Multi-status selection
+                var statusChoices = statusOptions.Select(status => 
                 {
-                    AnsiConsole.MarkupLine($"  • {statusChoice.StatusName}");
+                    var statusName = status.Substring(status.IndexOf(' ') + 1, status.IndexOf('(') - status.IndexOf(' ') - 1).Trim();
+                    return new StatusChoice { StatusName = statusName, DisplayText = status };
+                }).ToList();
+
+                AnsiConsole.WriteLine();
+                AnsiConsole.MarkupLine("[blue]Available statuses:[/]");
+                foreach (var choice in statusChoices)
+                {
+                    AnsiConsole.MarkupLine($"  {choice.DisplayText}");
+                }
+                AnsiConsole.WriteLine();
+
+                var statusPrompt = new MultiSelectionPrompt<StatusChoice>()
+                    .Title("Select one or more statuses (use SPACE to select, ENTER to confirm):")
+                    .PageSize(15)
+                    .UseConverter(item => item.DisplayText)
+                    .AddChoices(statusChoices);
+
+                var selectedStatuses = AnsiConsole.Prompt(statusPrompt);
+            
+                AnsiConsole.WriteLine();
+                AnsiConsole.MarkupLine($"[green]Selected {selectedStatuses.Count} status(es):[/]");
+            
+                if (selectedStatuses.Any())
+                {
+                    foreach (var statusChoice in selectedStatuses)
+                    {
+                        AnsiConsole.MarkupLine($"  • {statusChoice.StatusName}");
                     
-                    if (statusChoice.StatusName == "No Ticket")
-                    {
-                        // Select "No Ticket" group
-                        var ticketId = $"NO-TICKET-{Guid.NewGuid():N}";
-                        selectedTickets.Add(ticketId);
-                        AnsiConsole.MarkupLine($"    → Added No Ticket group: {ticketId}");
-                    }
-                    else
-                    {
-                        // Status-based selection
-                        var matchingTickets = contentAnalysis.TicketGroups
-                            .Where(tg => tg.TicketNumber != "No Ticket" && (tg.JiraInfo?.Status ?? "Unknown") == statusChoice.StatusName);
-                        
-                        AnsiConsole.MarkupLine($"    [dim]Looking for tickets with status: '{statusChoice.StatusName}'[/]");
-                        AnsiConsole.MarkupLine($"    [dim]Found {matchingTickets.Count()} matching tickets[/]");
-                        
-                        foreach (var ticketGroup in matchingTickets)
+                        if (statusChoice.StatusName == "No Ticket")
                         {
-                            selectedTickets.Add(ticketGroup.TicketNumber);
-                            AnsiConsole.MarkupLine($"    → Added ticket: {ticketGroup.TicketNumber}");
+                            // Select "No Ticket" group
+                            var ticketId = $"NO-TICKET-{Guid.NewGuid():N}";
+                            selectedTickets.Add(ticketId);
+                            AnsiConsole.MarkupLine($"    → Added No Ticket group: {ticketId}");
                         }
-                        
-                        if (!matchingTickets.Any())
+                        else
                         {
-                            AnsiConsole.MarkupLine($"    [yellow]⚠️  No tickets found with status '{statusChoice.StatusName}'[/]");
-                            // Debug: show all available statuses
-                            var allStatuses = contentAnalysis.TicketGroups
-                                .Where(tg => tg.TicketNumber != "No Ticket" && tg.JiraInfo != null)
-                                .Select(tg => tg.JiraInfo!.Status)
-                                .Distinct()
-                                .OrderBy(s => s)
-                                .ToList();
-                            AnsiConsole.MarkupLine($"    [dim]Available statuses: {string.Join(", ", allStatuses)}[/]");
+                            // Status-based selection
+                            var matchingTickets = contentAnalysis.TicketGroups
+                                .Where(tg => tg.TicketNumber != "No Ticket" && (tg.JiraInfo?.Status ?? "Unknown") == statusChoice.StatusName);
+                        
+                            AnsiConsole.MarkupLine($"    [dim]Looking for tickets with status: '{statusChoice.StatusName}'[/]");
+                            AnsiConsole.MarkupLine($"    [dim]Found {matchingTickets.Count()} matching tickets[/]");
+                        
+                            foreach (var ticketGroup in matchingTickets)
+                            {
+                                selectedTickets.Add(ticketGroup.TicketNumber);
+                                AnsiConsole.MarkupLine($"    → Added ticket: {ticketGroup.TicketNumber}");
+                            }
+                        
+                            if (!matchingTickets.Any())
+                            {
+                                AnsiConsole.MarkupLine($"    [yellow]⚠️  No tickets found with status '{statusChoice.StatusName}'[/]");
+                                // Debug: show all available statuses
+                                var allStatuses = contentAnalysis.TicketGroups
+                                    .Where(tg => tg.TicketNumber != "No Ticket" && tg.JiraInfo != null)
+                                    .Select(tg => tg.JiraInfo!.Status)
+                                    .Distinct()
+                                    .OrderBy(s => s)
+                                    .ToList();
+                                AnsiConsole.MarkupLine($"    [dim]Available statuses: {string.Join(", ", allStatuses)}[/]");
+                            }
                         }
                     }
                 }
-            }
-            else
-            {
-                AnsiConsole.MarkupLine("[yellow]No statuses selected. Returning to main menu.[/]");
-                return SelectTicketsInteractively(contentAnalysis); // Recursive call to restart
-            }
-        }
-        else if (selectionMethod == "Manual Selection")
-        {
-            // Step 2: Manual ticket selection
-            var ticketChoices = contentAnalysis.TicketGroups.Select(tg => 
-            {
-                var ticketId = tg.TicketNumber == "No Ticket" ? $"NO-TICKET-{Guid.NewGuid():N}" : tg.TicketNumber;
-                var statusIcon = GetStatusIcon(tg.JiraInfo?.Status ?? "Unknown");
-                var summary = tg.JiraInfo?.Summary ?? "";
-                if (summary.Length > 40) summary = summary.Substring(0, 37) + "...";
-                
-                var displayText = tg.TicketNumber == "No Ticket" 
-                    ? $"{statusIcon} {ticketId} | {tg.MergeRequests.Count} MRs, {tg.StandaloneCommits.Count} standalone"
-                    : $"{statusIcon} {Markup.Escape(tg.TicketNumber)} | {Markup.Escape(tg.JiraInfo?.Status ?? "Unknown")} | {Markup.Escape(summary)} | {tg.MergeRequests.Count} MRs, {tg.StandaloneCommits.Count} standalone";
-                
-                return new TicketChoice { TicketGroup = tg, DisplayText = displayText, TicketId = ticketId };
-            }).ToList();
+                else
+                {
+                    AnsiConsole.MarkupLine("[yellow]No statuses selected. Returning to main menu.[/]");
+                    return SelectTicketsInteractively(contentAnalysis); // Recursive call to restart
+                }
 
-            var prompt = new MultiSelectionPrompt<TicketChoice>()
-                .Title("Select individual tickets:")
-                .PageSize(15)
-                .UseConverter(item => item.DisplayText)
-                .AddChoices(ticketChoices);
+                break;
+            }
+            case "Manual Selection":
+            {
+                // Step 2: Manual ticket selection
+                var ticketChoices = contentAnalysis.TicketGroups.Select(tg => 
+                {
+                    var ticketId = tg.TicketNumber == "No Ticket" ? $"NO-TICKET-{Guid.NewGuid():N}" : tg.TicketNumber;
+                    var statusIcon = GetStatusIcon(tg.JiraInfo?.Status ?? "Unknown");
+                    var summary = tg.JiraInfo?.Summary ?? "";
+                    if (summary.Length > 40) summary = summary.Substring(0, 37) + "...";
+                
+                    var displayText = tg.TicketNumber == "No Ticket" 
+                        ? $"{statusIcon} {ticketId} | {tg.MergeRequests.Count} MRs, {tg.StandaloneCommits.Count} standalone"
+                        : $"{statusIcon} {Markup.Escape(tg.TicketNumber)} | {Markup.Escape(tg.JiraInfo?.Status ?? "Unknown")} | {Markup.Escape(summary)} | {tg.MergeRequests.Count} MRs, {tg.StandaloneCommits.Count} standalone";
+                
+                    return new TicketChoice { TicketGroup = tg, DisplayText = displayText, TicketId = ticketId };
+                }).ToList();
 
-            var selectedItems = AnsiConsole.Prompt(prompt);
-            selectedTickets.AddRange(selectedItems.Select(item => item.TicketId));
+                var prompt = new MultiSelectionPrompt<TicketChoice>()
+                    .Title("Select individual tickets:")
+                    .PageSize(15)
+                    .UseConverter(item => item.DisplayText)
+                    .AddChoices(ticketChoices);
+
+                var selectedItems = AnsiConsole.Prompt(prompt);
+                selectedTickets.AddRange(selectedItems.Select(item => item.TicketId));
+                break;
+            }
         }
 
         // Step 3: Show dependencies and confirm selection
@@ -691,14 +688,16 @@ public static class CherryPickHelper
                     selectedTickets.AddRange(dependencies);
                     selectedTickets = selectedTickets.Distinct().ToList();
                 }
+
+                // Display final selection summary
+                AnsiConsole.WriteLine();
+                AnsiConsole.Write(new Panel(
+                    $"Selected {selectedTickets.Count} tickets for cherry-pick:\n" +
+                    string.Join("\n", selectedTickets.Select(t => $"• {t}"))
+                ).BorderColor(Color.Green));
             }
 
-            // Display final selection summary
-            AnsiConsole.WriteLine();
-            AnsiConsole.Write(new Panel(
-                $"Selected {selectedTickets.Count} tickets for cherry-pick:\n" +
-                string.Join("\n", selectedTickets.Select(t => $"• {t}"))
-            ).BorderColor(Color.Green));
+            
         }
 
         return selectedTickets;

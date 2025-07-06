@@ -616,10 +616,26 @@ public static class CherryPickHelper
                         var matchingTickets = contentAnalysis.TicketGroups
                             .Where(tg => tg.TicketNumber != "No Ticket" && (tg.JiraInfo?.Status ?? "Unknown") == statusChoice.StatusName);
                         
+                        AnsiConsole.MarkupLine($"    [dim]Looking for tickets with status: '{statusChoice.StatusName}'[/]");
+                        AnsiConsole.MarkupLine($"    [dim]Found {matchingTickets.Count()} matching tickets[/]");
+                        
                         foreach (var ticketGroup in matchingTickets)
                         {
                             selectedTickets.Add(ticketGroup.TicketNumber);
                             AnsiConsole.MarkupLine($"    → Added ticket: {ticketGroup.TicketNumber}");
+                        }
+                        
+                        if (!matchingTickets.Any())
+                        {
+                            AnsiConsole.MarkupLine($"    [yellow]⚠️  No tickets found with status '{statusChoice.StatusName}'[/]");
+                            // Debug: show all available statuses
+                            var allStatuses = contentAnalysis.TicketGroups
+                                .Where(tg => tg.TicketNumber != "No Ticket" && tg.JiraInfo != null)
+                                .Select(tg => tg.JiraInfo!.Status)
+                                .Distinct()
+                                .OrderBy(s => s)
+                                .ToList();
+                            AnsiConsole.MarkupLine($"    [dim]Available statuses: {string.Join(", ", allStatuses)}[/]");
                         }
                     }
                 }

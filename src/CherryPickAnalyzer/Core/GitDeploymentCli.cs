@@ -84,8 +84,23 @@ public class GitDeploymentCli : IDisposable
                     // Bulk fetch all tickets at once
                     var ticketInfos = await CherryPickHelper.FetchJiraTicketsBulkAsync(tickets, jiraConfig);
                     
-                    // Display multi-select interface for tickets
-                    _analysisDisplay.DisplayTicketMultiSelect(ticketInfos, tickets);
+                    // Display ticket selection interface (interactive or display-only)
+                    if (options.Interactive)
+                    {
+                        var selectedTickets = _analysisDisplay.DisplayTicketMultiSelectInteractive(ticketInfos, tickets);
+                        
+                        // TODO: Use selectedTickets to filter commits or generate commands
+                        if (selectedTickets.Any())
+                        {
+                            AnsiConsole.WriteLine();
+                            AnsiConsole.Write(new Panel("Selected tickets will be used for cherry-pick filtering")
+                                .BorderColor(Color.Blue));
+                        }
+                    }
+                    else
+                    {
+                        _analysisDisplay.DisplayTicketMultiSelect(ticketInfos, tickets);
+                    }
                     
                     // Show summary of fetched tickets
                     AnsiConsole.MarkupLine($"[green]✅ Fetched {ticketInfos.Count} tickets from Jira[/]");

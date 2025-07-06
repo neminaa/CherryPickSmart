@@ -41,4 +41,7 @@ public class AnalyzeOptions
 
     [Option("jira-project", Required = true, HelpText = "Jira project key (e.g., HSAMED). Overrides config file if set.")]
     public string JiraDefaultProject { get; set; } = "";
+
+    [Option("interactive", Required = false, HelpText = "Enable interactive ticket selection mode", Default = true)]
+    public bool Interactive { get; set; } = true;
 }

@@ -188,6 +188,59 @@ public class AnalysisDisplay
         ).BorderColor(Color.Green));
     }
 
+    public List<CherryPickHelper.JiraTicketInfo> DisplayTicketMultiSelectInteractive(Dictionary<string, CherryPickHelper.JiraTicketInfo> ticketInfos, List<string> allTickets)
+    {
+        if (!ticketInfos.Any())
+        {
+            AnsiConsole.MarkupLine("[yellow]No Jira tickets found to display[/]");
+            return new List<CherryPickHelper.JiraTicketInfo>();
+        }
+
+        AnsiConsole.WriteLine();
+        AnsiConsole.Write(new Rule("Interactive Ticket Selection").RuleStyle("blue"));
+
+        // Create the interactive prompt
+        var prompt = new MultiSelectionPrompt<CherryPickHelper.JiraTicketInfo>()
+            .Title("Select tickets to include in cherry-pick:")
+            .PageSize(15)
+            .UseConverter(ticket => 
+            {
+                var commitCount = allTickets.Count(t => t == ticket.Key);
+                var statusIcon = GetStatusIcon(ticket.Status);
+                var summary = ticket.Summary.Length > 50 ? ticket.Summary.Substring(0, 47) + "..." : ticket.Summary;
+                // Use Markup.Escape to properly escape all markup characters
+                var safeTicketKey = Markup.Escape(ticket.Key);
+                var safeStatus = Markup.Escape(ticket.Status);
+                var safeSummary = Markup.Escape(summary);
+                return $"{statusIcon} {safeTicketKey} | {safeStatus} | {commitCount} commits | {safeSummary}";
+            })
+            .AddChoices(ticketInfos.Values.OrderBy(t => GetStatusPriority(t.Status)).ThenBy(t => t.Key));
+
+        var selectedTickets = AnsiConsole.Prompt(prompt);
+        
+        // Display summary of selected tickets
+        if (selectedTickets.Any())
+        {
+            AnsiConsole.WriteLine();
+            AnsiConsole.Write(new Panel($"Selected {selectedTickets.Count} tickets for cherry-pick")
+                .BorderColor(Color.Green));
+            
+            foreach (var ticket in selectedTickets)
+            {
+                var commitCount = allTickets.Count(t => t == ticket.Key);
+                AnsiConsole.MarkupLine($"[green]✅[/] {ticket.Key} ({commitCount} commits)");
+            }
+        }
+        else
+        {
+            AnsiConsole.WriteLine();
+            AnsiConsole.Write(new Panel("No tickets selected")
+                .BorderColor(Color.Yellow));
+        }
+
+        return selectedTickets;
+    }
+
     private static string GetStatusIcon(string status)
     {
         return status.ToLower() switch

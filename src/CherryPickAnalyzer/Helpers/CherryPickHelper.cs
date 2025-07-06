@@ -578,23 +578,37 @@ public static class CherryPickHelper
                 return new StatusChoice { StatusName = statusName, DisplayText = status };
             }).ToList();
 
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine("[blue]Available statuses:[/]");
+            foreach (var choice in statusChoices)
+            {
+                AnsiConsole.MarkupLine($"  {choice.DisplayText}");
+            }
+            AnsiConsole.WriteLine();
+
             var statusPrompt = new MultiSelectionPrompt<StatusChoice>()
-                .Title("Select one or more statuses:")
+                .Title("Select one or more statuses (use SPACE to select, ENTER to confirm):")
                 .PageSize(15)
                 .UseConverter(item => item.DisplayText)
                 .AddChoices(statusChoices);
 
             var selectedStatuses = AnsiConsole.Prompt(statusPrompt);
             
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine($"[green]Selected {selectedStatuses.Count} status(es):[/]");
+            
             if (selectedStatuses.Any())
             {
                 foreach (var statusChoice in selectedStatuses)
                 {
+                    AnsiConsole.MarkupLine($"  • {statusChoice.StatusName}");
+                    
                     if (statusChoice.StatusName == "No Ticket")
                     {
                         // Select "No Ticket" group
                         var ticketId = $"NO-TICKET-{Guid.NewGuid():N}";
                         selectedTickets.Add(ticketId);
+                        AnsiConsole.MarkupLine($"    → Added No Ticket group: {ticketId}");
                     }
                     else
                     {
@@ -605,9 +619,15 @@ public static class CherryPickHelper
                         foreach (var ticketGroup in matchingTickets)
                         {
                             selectedTickets.Add(ticketGroup.TicketNumber);
+                            AnsiConsole.MarkupLine($"    → Added ticket: {ticketGroup.TicketNumber}");
                         }
                     }
                 }
+            }
+            else
+            {
+                AnsiConsole.MarkupLine("[yellow]No statuses selected. Returning to main menu.[/]");
+                return SelectTicketsInteractively(contentAnalysis); // Recursive call to restart
             }
         }
         else if (selectionMethod == "Manual Selection")

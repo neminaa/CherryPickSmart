@@ -87,11 +87,14 @@ public class GitDeploymentCli : IDisposable
                     var htmlService = new HtmlExportService();
                     var html = htmlService.GenerateHtml(analysis, options.SourceBranch, options.TargetBranch);
                     await File.WriteAllTextAsync(outputPath, html);
-                    AnsiConsole.MarkupLine($"[green]✅ HTML report exported to: {outputPath}[/]");
-                }
+                    var fileUrl = $"file:///{outputPath}";
+                    AnsiConsole.MarkupLine("[green]✅ HTML report exported to:[/] ");
+                    AnsiConsole.MarkupLine($"[link={fileUrl}]{Markup.Escape(outputPath)}[/]");
+                    AnsiConsole.WriteLine();
+                } 
                 catch (Exception ex)
                 {
-                    AnsiConsole.MarkupLine($"[red]Failed to export HTML: {ex.Message}[/]");
+                    AnsiConsole.WriteException(ex);
                 }
             }
 

@@ -44,4 +44,7 @@ public class AnalyzeOptions
 
     [Option("interactive", Required = false, HelpText = "Enable interactive ticket selection mode", Default = true)]
     public bool Interactive { get; set; } = true;
+
+    [Option("output-dir", Required = false, HelpText = "Output directory for HTML export (defaults to current directory)")]
+    public string? OutputDir { get; set; }
 }

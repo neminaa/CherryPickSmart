@@ -2,6 +2,7 @@
 using CherryPickAnalyzer.Helpers;
 using CherryPickAnalyzer.Models;
 using CherryPickAnalyzer.Options;
+using CherryPickAnalyzer.Services;
 using LibGit2Sharp;
 using Spectre.Console;
 using CherryPickOptions = CherryPickAnalyzer.Options.CherryPickOptions;
@@ -70,30 +71,28 @@ public class GitDeploymentCli : IDisposable
 
             _analysisDisplay.DisplaySuggestions(analysis, options.TargetBranch);
 
-            // Interactive ticket selection and cherry-pick command generation
-            if (analysis.HasContentDifferences && analysis.ContentAnalysis.TicketGroups.Any())
+            // HTML Export
+            if (!string.IsNullOrEmpty(options.OutputDir) || analysis.HasContentDifferences)
             {
-                AnsiConsole.WriteLine();
-                var selectedTickets = CherryPickHelper.SelectTicketsInteractively(analysis.ContentAnalysis);
-
-                if (selectedTickets.Any())
+                try
                 {
-                    AnsiConsole.WriteLine();
-                    CherryPickHelper.DisplayTicketBasedCherryPickCommands(options.TargetBranch, analysis.ContentAnalysis, selectedTickets);
+                    var outputDir = options.OutputDir ?? Environment.CurrentDirectory;
+                    var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                    var filename = $"cherry-pick-analysis_{options.SourceBranch.Replace("/", "_")}_to_{options.TargetBranch.Replace("/", "_")}_{timestamp}.html";
+                    var outputPath = Path.Combine(outputDir, filename);
+                    
+                    // Ensure output directory exists
+                    Directory.CreateDirectory(outputDir);
+                    
+                    var htmlService = new HtmlExportService();
+                    var html = htmlService.GenerateHtml(analysis, options.SourceBranch, options.TargetBranch);
+                    await File.WriteAllTextAsync(outputPath, html);
+                    AnsiConsole.MarkupLine($"[green]✅ HTML report exported to: {outputPath}[/]");
                 }
-            }
-
-            switch (options.Format.ToLower())
-            {
-                case "json":
-                    _analysisDisplay.DisplayAnalysisAsJson(analysis);
-                    break;
-                case "markdown":
-                    _analysisDisplay.DisplayAnalysisAsMarkdown(analysis, options.SourceBranch, options.TargetBranch);
-                    break;
-                default:
-                    AnsiConsole.MarkupLine($"[red]Unknown format: {options.Format}[/]");
-                    return 1;
+                catch (Exception ex)
+                {
+                    AnsiConsole.MarkupLine($"[red]Failed to export HTML: {ex.Message}[/]");
+                }
             }
 
 

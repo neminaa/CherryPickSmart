@@ -193,7 +193,7 @@ public class AnalysisDisplay
         if (!ticketInfos.Any())
         {
             AnsiConsole.MarkupLine("[yellow]No Jira tickets found to display[/]");
-            return new List<CherryPickHelper.JiraTicketInfo>();
+            return [];
         }
 
         AnsiConsole.WriteLine();

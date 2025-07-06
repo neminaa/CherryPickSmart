@@ -8,7 +8,7 @@ public static class FileTreeHelper
 {
     public static void AddFileToTree(Spectre.Console.Tree tree, string filePath, TreeNode fileNode)
     {
-        var pathParts = filePath.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+        var pathParts = filePath.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
         object currentLevel = tree;
         for (var i = 0; i < pathParts.Length - 1; i++)
         {

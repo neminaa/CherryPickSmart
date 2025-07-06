@@ -267,10 +267,10 @@ public class GitDeploymentCli : IDisposable
     {
         var source = _branchValidator.GetBranch(sourceBranch);
         var target = _branchValidator.GetBranch(targetBranch);
-        var patch = _repo.Diff.Compare<Patch>(target.Tip.Tree, source.Tip.Tree);
         
         var analysis = new ContentAnalysis { ChangedFiles = [] };
-        int totalAdded = 0, totalDeleted = 0;
+        const int totalAdded = 0;
+        const int totalDeleted = 0;
 
         // Build set of cherry-pick commit SHAs for quick lookup
         var cherryPickCommitShas = new HashSet<string>(newCherryPickCommits.Select(c => c.Sha));
@@ -316,11 +316,9 @@ public class GitDeploymentCli : IDisposable
                     // For message mode, just check if any cherry-pick commit is in ancestry (direct parents)
                     foreach (var parent in commit.Parents)
                     {
-                        if (cherryPickCommitShas.Contains(parent.Sha))
-                        {
-                            foundCherryPicks.Add(parent.Sha);
-                            cherryPicksCoveredByMerge.Add(parent.Sha);
-                        }
+                        if (!cherryPickCommitShas.Contains(parent.Sha)) continue;
+                        foundCherryPicks.Add(parent.Sha);
+                        cherryPicksCoveredByMerge.Add(parent.Sha);
                     }
                 }
             }
@@ -350,24 +348,22 @@ public class GitDeploymentCli : IDisposable
         var maximalMerges = new Dictionary<string, HashSet<string>>();
         var mergeCommits = mergeToCherryPicks.Keys.ToList();
         
-        for (int i = 0; i < mergeCommits.Count; i++)
+        for (var i = 0; i < mergeCommits.Count; i++)
         {
             var currentMerge = mergeCommits[i];
             var currentCherryPicks = mergeToCherryPicks[currentMerge];
             var isMaximal = true;
             
             // Check if this merge is superseded by a later, more comprehensive merge
-            for (int j = i + 1; j < mergeCommits.Count; j++)
+            for (var j = i + 1; j < mergeCommits.Count; j++)
             {
                 var laterMerge = mergeCommits[j];
                 var laterCherryPicks = mergeToCherryPicks[laterMerge];
                 
                 // If later merge includes all cherry-picks from current merge, current is not maximal
-                if (currentCherryPicks.All(cp => laterCherryPicks.Contains(cp)))
-                {
-                    isMaximal = false;
-                    break;
-                }
+                if (!currentCherryPicks.All(cp => laterCherryPicks.Contains(cp))) continue;
+                isMaximal = false;
+                break;
             }
             
             if (isMaximal)
@@ -380,26 +376,23 @@ public class GitDeploymentCli : IDisposable
 
         await AnsiConsole.Live(tree)
             .AutoClear(true)
-            .StartAsync(async ctx =>
+            .Start(_ =>
             {
                 // Collect commits for display - prioritize merge commits over individual cherry-picks
                 var commitsToDisplay = new List<CommitInfo>();
                 var commitsInMerges = new HashSet<string>();
                 
                 // Add merge commits first
-                foreach (var mergeEntry in maximalMerges)
+                foreach (var (mergeSha, hashSet) in maximalMerges)
                 {
-                    var mergeSha = mergeEntry.Key;
                     var mergeCommit = outstandingCommits.FirstOrDefault(c => c.Sha == mergeSha);
-                    if (mergeCommit != null)
-                    {
-                        commitsToDisplay.Add(mergeCommit);
+                    if (mergeCommit == null) continue;
+                    commitsToDisplay.Add(mergeCommit);
                         
-                        // Track which cherry-pick commits are included in merges
-                        foreach (var cherrySha in mergeEntry.Value)
-                        {
-                            commitsInMerges.Add(cherrySha);
-                        }
+                    // Track which cherry-pick commits are included in merges
+                    foreach (var cherrySha in hashSet)
+                    {
+                        commitsInMerges.Add(cherrySha);
                     }
                 }
                 
@@ -410,27 +403,23 @@ public class GitDeploymentCli : IDisposable
                 commitsToDisplay.AddRange(standaloneCherryPicks);
                 
                 // Remove any cherry-pick commits that are already included in merge commits
-                commitsToDisplay = commitsToDisplay.Where(c => 
+                commitsToDisplay = [.. commitsToDisplay.Where(c => 
                     maximalMerges.ContainsKey(c.Sha) || // Keep merge commits
                     !commitsInMerges.Contains(c.Sha)    // Keep cherry-picks not in merges
-                ).ToList();
-                
-                // Group commits by ticket number, with fallback to merge commit tickets
-                //var ticketGroups = CherryPickHelper.GroupCommitsByTicket(commitsToDisplay, maximalMerges, _repo);
+                )];
                 
                 // Build multi-ticket MR map
                 var mergeCommitInfos = commitsToDisplay.Where(c => maximalMerges.ContainsKey(c.Sha)).ToList();
                 var ticketToMrs = CherryPickHelper.BuildMrTicketMap(mergeCommitInfos, outstandingCommits, _repo);
 
                 // Display grouped by ticket (multi-ticket aware)
-                foreach (var ticketGroup in ticketToMrs.OrderBy(g => g.Key))
+                foreach (var (ticketNumber, list) in ticketToMrs.OrderBy(g => g.Key))
                 {
-                    var mrInfos = ticketGroup.Value.Where(mr => mr.MrCommits.Count > 0).ToList();
+                    var mrInfos = list.Where(mr => mr.MrCommits.Count > 0).ToList();
                     if (mrInfos.Count == 0) continue; // Skip tickets with no real MRs
 
                     if (cancellationToken.IsCancellationRequested) break;
 
-                    var ticketNumber = ticketGroup.Key;
                     var ticketIcon = ticketNumber == "No Ticket" ? "❓" : "🎫";
                     var ticketText = $"[bold yellow]{ticketIcon} {Markup.Escape(ticketNumber)}[/] [grey]({mrInfos.Count} MRs)[/]";
                     var ticketNode = tree.AddNode(new TreeNode(new Markup(ticketText)));
@@ -447,14 +436,15 @@ public class GitDeploymentCli : IDisposable
                         var mergeNode = ticketNode.AddNode(new TreeNode(new Markup(mergeText)));
 
                         // Show MR commits (if you want)
-                        foreach (var mrCommit in mrInfo.MrCommits)
+                        foreach (var mrText in mrInfo.MrCommits
+                                     .Select(mrCommit => $"[dim cyan]  {Markup.Escape(mrCommit.ShortSha)} {Markup.Escape(mrCommit.Author)}: {Markup.Escape(mrCommit.Message)}[/] [grey]({Markup.Escape(mrCommit.Date.ToString("yyyy-MM-dd"))})[/]"))
                         {
-                            var mrText = $"[dim cyan]  {Markup.Escape(mrCommit.ShortSha)} {Markup.Escape(mrCommit.Author)}: {Markup.Escape(mrCommit.Message)}[/] [grey]({Markup.Escape(mrCommit.Date.ToString("yyyy-MM-dd"))})[/]";
                             mergeNode.AddNode(new TreeNode(new Markup(mrText)));
                         }
-                        // ... (add file tree, etc. as before)
                     }
                 }
+
+                return Task.CompletedTask;
             });
         
         // Print the tree again so it remains visible after the live context

@@ -2,6 +2,7 @@ using CherryPickAnalyzer.Models;
 using Spectre.Console;
 using System.Text.RegularExpressions;
 using LibGit2Sharp;
+using FuzzySharp;
 
 namespace CherryPickAnalyzer.Helpers;
 
@@ -80,7 +81,7 @@ public static class CherryPickHelper
     }
 
     /// <summary>
-    /// Groups commits by their primary ticket number, with fallback to merge commit tickets
+    /// Groups commits by their primary ticket number, with fuzzy correction for typos using FuzzySharp.
     /// </summary>
     /// <param name="commits">List of commits to group</param>
     /// <param name="mergeToCherryPicks">Dictionary mapping merge commits to their included cherry-pick commits</param>
@@ -89,25 +90,51 @@ public static class CherryPickHelper
     {
         var ticketGroups = new Dictionary<string, List<CommitInfo>>();
         var noTicketCommits = new List<CommitInfo>();
+        var ticketToCommits = new Dictionary<string, List<CommitInfo>>();
+        var allTickets = new List<string>();
 
         // First pass: group commits that have their own ticket numbers
         foreach (var commit in commits)
         {
             var tickets = ExtractTicketNumbers(commit.Message);
-            
             if (tickets.Any())
             {
-                // Use the first ticket as the primary grouping key
                 var primaryTicket = tickets.First();
-                if (!ticketGroups.ContainsKey(primaryTicket))
-                    ticketGroups[primaryTicket] = new List<CommitInfo>();
-                ticketGroups[primaryTicket].Add(commit);
+                if (!ticketToCommits.ContainsKey(primaryTicket))
+                    ticketToCommits[primaryTicket] = new List<CommitInfo>();
+                ticketToCommits[primaryTicket].Add(commit);
+                allTickets.Add(primaryTicket);
             }
             else
             {
-                // Commits without tickets go to a temporary list for second pass
                 noTicketCommits.Add(commit);
             }
+        }
+
+        // Build set of common/known tickets (appearing more than once)
+        var knownTickets = ticketToCommits.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        // Fuzzy correction for rare/typo tickets
+        var correctedTicketToCommits = new Dictionary<string, List<CommitInfo>>();
+        foreach (var kvp in ticketToCommits)
+        {
+            var ticket = kvp.Key;
+            var commitsForTicket = kvp.Value;
+            // If this ticket is not in the known set (i.e., typo or rare), try to correct
+            string corrected = ticket;
+            if (!knownTickets.Contains(ticket))
+            {
+                // Find the closest known ticket by FuzzySharp
+                var best = knownTickets
+                    .Select(t => new { Ticket = t, Score = Fuzz.Ratio(ticket, t) })
+                    .OrderByDescending(x => x.Score)
+                    .FirstOrDefault(x => x.Score >= 90);
+                if (best != null)
+                    corrected = best.Ticket;
+            }
+            if (!correctedTicketToCommits.ContainsKey(corrected))
+                correctedTicketToCommits[corrected] = new List<CommitInfo>();
+            correctedTicketToCommits[corrected].AddRange(commitsForTicket);
         }
 
         // Second pass: assign tickets to commits without tickets based on their merge commit
@@ -115,14 +142,11 @@ public static class CherryPickHelper
         {
             foreach (var commit in noTicketCommits.ToList())
             {
-                // Find if this commit is included in any merge commit
                 string assignedTicket = null;
-                
                 foreach (var mergeEntry in mergeToCherryPicks)
                 {
                     if (mergeEntry.Value.Contains(commit.Sha))
                     {
-                        // This commit is included in a merge, check if the merge has a ticket
                         var mergeCommit = commits.FirstOrDefault(c => c.Sha == mergeEntry.Key);
                         if (mergeCommit != null)
                         {
@@ -135,13 +159,11 @@ public static class CherryPickHelper
                         }
                     }
                 }
-                
                 if (assignedTicket != null)
                 {
-                    // Assign this commit to the merge's ticket group
-                    if (!ticketGroups.ContainsKey(assignedTicket))
-                        ticketGroups[assignedTicket] = new List<CommitInfo>();
-                    ticketGroups[assignedTicket].Add(commit);
+                    if (!correctedTicketToCommits.ContainsKey(assignedTicket))
+                        correctedTicketToCommits[assignedTicket] = new List<CommitInfo>();
+                    correctedTicketToCommits[assignedTicket].Add(commit);
                     noTicketCommits.Remove(commit);
                 }
             }
@@ -149,9 +171,9 @@ public static class CherryPickHelper
 
         // Add the remaining no-ticket group if it has commits
         if (noTicketCommits.Any())
-            ticketGroups["No Ticket"] = noTicketCommits;
+            correctedTicketToCommits["No Ticket"] = noTicketCommits;
 
-        return ticketGroups;
+        return correctedTicketToCommits;
     }
 
     /// <summary>
@@ -200,5 +222,45 @@ public static class CherryPickHelper
         // MR commits = featureAncestors - targetAncestors
         featureAncestors.ExceptWith(targetAncestors);
         return featureAncestors;
+    }
+
+    /// <summary>
+    /// Returns the list of commits on the first-parent path from the feature branch tip (parent2) to the merge base with the target branch (parent1).
+    /// </summary>
+    /// <param name="repo">The repository</param>
+    /// <param name="mergeCommit">The merge commit (MR)</param>
+    /// <returns>List of commits (most recent first) that are directly part of the MR</returns>
+    public static List<Commit> GetMRCommitsFirstParentOnly(Repository repo, Commit mergeCommit)
+    {
+        if (mergeCommit == null || mergeCommit.Parents.Count() < 2)
+            return new List<Commit>();
+
+        var parent1 = mergeCommit.Parents.ElementAt(0); // target branch tip before merge
+        var parent2 = mergeCommit.Parents.ElementAt(1); // feature branch tip at merge
+
+        // Find merge base
+        var mergeBase = repo.ObjectDatabase.FindMergeBase(parent1, parent2);
+        var commits = new List<Commit>();
+        var current = parent2;
+        while (current != null && current != mergeBase)
+        {
+            commits.Add(current);
+            if (!current.Parents.Any())
+                break;
+            current = current.Parents.First(); // Only follow first parent
+        }
+        return commits;
+    }
+
+    /// <summary>
+    /// Returns the list of non-merge (single-parent) commits on the first-parent path from the feature branch tip (parent2) to the merge base with the target branch (parent1).
+    /// </summary>
+    /// <param name="repo">The repository</param>
+    /// <param name="mergeCommit">The merge commit (MR)</param>
+    /// <returns>List of non-merge commits (most recent first) that are directly part of the MR</returns>
+    public static List<Commit> GetMRCommitsFirstParentOnlyNonMerges(Repository repo, Commit mergeCommit)
+    {
+        var all = GetMRCommitsFirstParentOnly(repo, mergeCommit);
+        return all.Where(c => c.Parents.Count() == 1).ToList(); // Only non-merge commits
     }
 }

@@ -398,39 +398,33 @@ public class GitDeploymentCli : IDisposable
                         var mergeText = $"[{commitColor}]🔀 {Markup.Escape(mergeCommit.ShortSha)} {Markup.Escape(mergeCommit.Author)}: {Markup.Escape(mergeCommit.Message)}[/] [grey]({Markup.Escape(mergeCommit.Date.ToString("yyyy-MM-dd"))})[/]";
                         var mergeNode = ticketNode.AddNode(new TreeNode(new Markup(mergeText)));
                         
-                        // Add included cherry-pick commits as sub-nodes
-                        if (maximalMerges.TryGetValue(mergeCommit.Sha, out var includedCherryPicks))
-                        {
-                            foreach (var cherrySha in includedCherryPicks)
-                            {
-                                var cherryCommit = outstandingCommits.FirstOrDefault(c => c.Sha == cherrySha);
-                                if (cherryCommit == null) continue;
-                                
-                                var cherryText = $"[dim cyan]  {Markup.Escape(cherryCommit.ShortSha)} {Markup.Escape(cherryCommit.Author)}: {Markup.Escape(cherryCommit.Message)}[/] [grey]({Markup.Escape(cherryCommit.Date.ToString("yyyy-MM-dd"))})[/]";
-                                mergeNode.AddNode(new TreeNode(new Markup(cherryText)));
-                            }
-                        }
-                        
-                        // Add file tree for merge commit
+                        // Use first-parent path for MR commits (non-merge only)
                         var mergeCommitObj = _repo.Lookup<LibGit2Sharp.Commit>(mergeCommit.Sha);
                         if (mergeCommitObj != null)
                         {
+                            var mrCommits = CherryPickHelper.GetMRCommitsFirstParentOnlyNonMerges(_repo, mergeCommitObj);
+                            foreach (var mrCommit in mrCommits)
+                            {
+                                // Find CommitInfo for this commit
+                                var commitInfo = outstandingCommits.FirstOrDefault(c => c.Sha == mrCommit.Sha);
+                                if (commitInfo == null) continue;
+                                var mrText = $"[dim cyan]  {Markup.Escape(commitInfo.ShortSha)} {Markup.Escape(commitInfo.Author)}: {Markup.Escape(commitInfo.Message)}[/] [grey]({Markup.Escape(commitInfo.Date.ToString("yyyy-MM-dd"))})[/]";
+                                mergeNode.AddNode(new TreeNode(new Markup(mrText)));
+                            }
+                            // Add file tree for the merge commit itself (as before)
                             var changedFiles = FileTreeHelper.GetFilesChangedByCommit(_repo, mergeCommitObj);
                             if (changedFiles.Any())
                             {
                                 // Filter out excluded files
                                 changedFiles = changedFiles.Where(f => !excludeFiles.Contains(Path.GetFileName(f.NewPath))).ToList();
-                                
                                 // Sort by impact and limit to top 5
                                 var sortedFiles = changedFiles
                                     .OrderByDescending(f => Math.Abs(f.LinesAdded) + Math.Abs(f.LinesDeleted))
                                     .Take(5)
                                     .ToList();
-                                
                                 if (sortedFiles.Any())
                                 {
                                     var filesNode = mergeNode.AddNode(new TreeNode(new Markup("[bold]📁 Files Changed:[/]")));
-                                    
                                     foreach (var file in sortedFiles)
                                     {
                                         var statusIcon = file.Status switch
@@ -441,12 +435,10 @@ public class GitDeploymentCli : IDisposable
                                             "Renamed" => "[blue]📝[/]",
                                             _ => "[dim]❓[/]"
                                         };
-                                        
                                         var changeText = $"[green]+{file.LinesAdded}[/] [red]-{file.LinesDeleted}[/]";
                                         var fileName = Path.GetFileName(file.NewPath);
                                         var fileText = $"{statusIcon} {Markup.Escape(fileName)} {changeText}";
                                         filesNode.AddNode(new TreeNode(new Markup(fileText)));
-                                        
                                         // Add to analysis for stats
                                         analysis.ChangedFiles.Add(new FileChange
                                         {
@@ -459,7 +451,6 @@ public class GitDeploymentCli : IDisposable
                                         totalAdded += file.LinesAdded;
                                         totalDeleted += file.LinesDeleted;
                                     }
-                                    
                                     if (changedFiles.Count > 5)
                                     {
                                         filesNode.AddNode(new TreeNode(new Markup($"[grey]...and {changedFiles.Count - 5} more files not shown[/]")));

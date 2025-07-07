@@ -110,7 +110,7 @@ public class GitDeploymentCli : IDisposable
             Directory.CreateDirectory(outputDir);
             
             // Get repository info and Jira base URL
-            var repoInfo = GetRepositoryInfo();
+            var repoInfo = GetRepositoryInfo(options.Remote);
             var jiraBaseUrl = CherryPickHelper.LoadOrCreateJiraConfig().JiraBaseUrl;
             
             if (!string.IsNullOrEmpty(repoInfo.DisplayName))
@@ -579,14 +579,14 @@ public class GitDeploymentCli : IDisposable
         return null;
     }
     
-    private RepositoryInfo GetRepositoryInfo()
+    private RepositoryInfo GetRepositoryInfo(string remote)
     {
         var info = new RepositoryInfo();
         
         try
         {
             // Method 1: From remote origin URL (most reliable)
-            var origin = _repo.Network.Remotes.FirstOrDefault(r => r.Name == "origin");
+            var origin = _repo.Network.Remotes.FirstOrDefault(r => r.Name == remote);
             if (origin?.Url != null)
             {
                 info.Url = origin.Url;
@@ -601,20 +601,6 @@ public class GitDeploymentCli : IDisposable
                 info.Name = Path.GetFileName(_repo.Info.WorkingDirectory);
             }
             
-            // Method 3: From git config (additional info)
-            try
-            {
-                var config = _repo.Config;
-                var repoName = config.Get<string>("remote.origin.url")?.Value;
-                if (!string.IsNullOrEmpty(repoName) && string.IsNullOrEmpty(info.Name))
-                {
-                    info.Name = ExtractRepoNameFromUrl(repoName);
-                }
-            }
-            catch
-            {
-                // Ignore config errors
-            }
             
             // Convert SSH URLs to HTTPS for display
             if (!string.IsNullOrEmpty(info.Url) && info.Url.StartsWith("git@"))

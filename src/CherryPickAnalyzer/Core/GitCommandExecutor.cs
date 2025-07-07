@@ -27,10 +27,7 @@ public class GitCommandExecutor(string repoPath)
                         FileName = "git",
                         Arguments = $"fetch {remote}",
                         WorkingDirectory = repoPath,
-                        UseShellExecute = false,
-                        RedirectStandardInput = true,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true
+                        UseShellExecute = true
                     };
 
                     AnsiConsole.MarkupLine($"[blue]🔄 Opening Git console for interactive authentication...[/]");

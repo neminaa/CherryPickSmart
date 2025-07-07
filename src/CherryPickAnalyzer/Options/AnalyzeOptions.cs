@@ -17,7 +17,7 @@ public class AnalyzeOptions
     [Option("remote", Required = false, HelpText = "Remote to fetch from", Default = "origin")]
     public string Remote { get; set; } = "origin";
 
-    [Option("no-fetch", Required = false,Default = true, HelpText = "Skip fetching latest changes")]
+    [Option("no-fetch", Required = false,Default = false, HelpText = "Skip fetching latest changes")]
     public bool NoFetch { get; set; }
 
     [Option("timeout", Required = false, HelpText = "Timeout in seconds", Default = 300)]

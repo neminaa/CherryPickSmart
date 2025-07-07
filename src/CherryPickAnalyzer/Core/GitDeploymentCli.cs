@@ -52,9 +52,11 @@ public class GitDeploymentCli : IDisposable
 
         try
         {
-            AnsiConsole.Write(new FigletText("TSP GIT Analyzer")
+            AnsiConsole.Write(new FigletText( "TSP GIT Helper")
                 .LeftJustified()
-                .Color(Color.Blue));
+                .Color(Color.Green3)
+            
+            );
 
             _repoInfoDisplay.DisplayRepositoryInfo(_repo.Head.FriendlyName, _repo.Network.Remotes.Select(r => r.Name));
             _repoInfoDisplay.DisplayRepositoryStatus();
@@ -69,9 +71,10 @@ public class GitDeploymentCli : IDisposable
             var analysis = await AnalyzeWithProgressAsync(options.SourceBranch,
                 options.TargetBranch, options.TicketPrefix, cts.Token);
 
-            AnalysisDisplay.DisplaySuggestions(analysis, options.TargetBranch);
+            AnalysisDisplay.DisplaySuggestions(analysis, options.SourceBranch, options.TargetBranch);
 
             await ExportHtmlReportAsync(options, analysis, cts);
+
 
             return 0;
 
@@ -88,7 +91,7 @@ public class GitDeploymentCli : IDisposable
         }
     }
 
-    private static async Task ExportHtmlReportAsync(AnalyzeOptions options, DeploymentAnalysis analysis,
+    private async Task ExportHtmlReportAsync(AnalyzeOptions options, DeploymentAnalysis analysis,
         CancellationTokenSource cts)
     {
         // HTML Export
@@ -105,8 +108,33 @@ public class GitDeploymentCli : IDisposable
             
             // Ensure output directory exists
             Directory.CreateDirectory(outputDir);
+            
+            // Get repository info and Jira base URL
+            var repoInfo = GetRepositoryInfo();
+            var jiraBaseUrl = CherryPickHelper.LoadOrCreateJiraConfig().JiraBaseUrl;
+            
+            if (!string.IsNullOrEmpty(repoInfo.DisplayName))
+            {
+                AnsiConsole.MarkupLine($"[blue]📦 Repository: {repoInfo.DisplayName}[/]");
+            }
+            else if (!string.IsNullOrEmpty(repoInfo.Name))
+            {
+                AnsiConsole.MarkupLine($"[blue]📦 Repository: {repoInfo.Name}[/]");
+            }
+            if (!string.IsNullOrEmpty(repoInfo.HttpsUrl))
+            {
+                AnsiConsole.MarkupLine($"[blue]🔗 Repository URL: {repoInfo.HttpsUrl}[/]");
+            }
+            if (!string.IsNullOrEmpty(repoInfo.Host))
+            {
+                AnsiConsole.MarkupLine($"[blue]🌐 Host: {repoInfo.Host}[/]");
+            }
+            if (!string.IsNullOrEmpty(jiraBaseUrl))
+            {
+                AnsiConsole.MarkupLine($"[blue]🎫 Jira Base URL: {jiraBaseUrl}[/]");
+            }
                     
-            var html = HtmlExportService.GenerateHtml(analysis, options.SourceBranch, options.TargetBranch);
+            var html = HtmlExportService.GenerateHtml(analysis, options.SourceBranch, options.TargetBranch, repoInfo.HttpsUrl, jiraBaseUrl, repoInfo.DisplayName ?? repoInfo.Name);
             await File.WriteAllTextAsync(outputPath, html, cts.Token);
             var fileUrl = $"file:///{outputPath}";
             AnsiConsole.MarkupLine($"[green]✅ HTML report exported to:[/] [link={fileUrl}]{Markup.Escape(outputPath)}[/]");
@@ -295,18 +323,33 @@ public class GitDeploymentCli : IDisposable
         var mergeCommitInfos = commitsToDisplay.Where(c => maximalMerges.ContainsKey(c.Sha)).ToList();
         var ticketToMrs = CherryPickHelper.BuildMrTicketMap(expectedPrefix,mergeCommitInfos, outstandingCommits, _repo);
 
+        // Process standalone cherry-pick commits (not covered by any merge) and group them by ticket
+        var unmergedCherryPicks = newCherryPickCommits
+            .Where(c => !cherryPicksCoveredByMerge.Contains(c.Sha))
+            .ToList();
+
+        // Collect ALL tickets (both from MRs and standalone commits) before fetching Jira info
+        var allTickets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        
+        // Add tickets from merge requests
+        allTickets.UnionWith(ticketToMrs.Keys);
+        
+        // Add tickets from standalone commits
+        foreach (var commit in unmergedCherryPicks)
+        {
+            var tickets = CherryPickHelper.ExtractTicketNumbers(expectedPrefix, commit.Message);
+            allTickets.UnionWith(tickets);
+        }
+
         // Fetch Jira ticket info for all tickets found in the analysis
         Dictionary<string, CherryPickHelper.JiraTicketInfo> ticketInfos = [];
         try
         {
             var jiraConfig = CherryPickHelper.LoadOrCreateJiraConfig();
-            var allTickets = ticketToMrs.Keys
-                .ToList();
-
             if (allTickets.Count != 0)
             {
                 AnsiConsole.MarkupLine("[blue]🔍 Fetching Jira ticket information...[/]");
-                ticketInfos = await CherryPickHelper.FetchJiraTicketsBulkAsync(allTickets, jiraConfig);
+                ticketInfos = await CherryPickHelper.FetchJiraTicketsBulkAsync(allTickets.ToList(), jiraConfig);
                 AnsiConsole.MarkupLine($"[green]✅ Fetched {ticketInfos.Count} tickets from Jira[/]");
             }
         }
@@ -349,11 +392,6 @@ public class GitDeploymentCli : IDisposable
 
             analysis.TicketGroups.Add(ticketGroup);
         }
-
-        // Process standalone cherry-pick commits (not covered by any merge) and group them by ticket
-        var unmergedCherryPicks = newCherryPickCommits
-            .Where(c => !cherryPicksCoveredByMerge.Contains(c.Sha))
-            .ToList();
 
         if (unmergedCherryPicks.Count != 0)
         {
@@ -496,6 +534,263 @@ public class GitDeploymentCli : IDisposable
             ModifiedFiles = [.. status.Modified.Select(f => f.FilePath)],
             StagedFiles = [.. status.Staged.Select(f => f.FilePath)]
         };
+    }
+    
+    private string? GetRepositoryUrl()
+    {
+        try
+        {
+            var origin = _repo.Network.Remotes.FirstOrDefault(r => r.Name == "origin");
+            if (origin?.Url != null)
+            {
+                var url = origin.Url;
+                if (url.StartsWith("git@"))
+                {
+                    // Convert git@host:owner/repo.git to https://host/owner/repo
+                    // Example: git@git.tsp.dev:hsa-share/medics/applications.git
+                    // Should become: https://git.tsp.dev/hsa-share/medics/applications
+                    
+                    // Remove "git@" prefix
+                    url = url.Substring(4);
+                    
+                    // Find the colon and replace it with "/"
+                    var colonIndex = url.IndexOf(':');
+                    if (colonIndex > 0)
+                    {
+                        var host = url.Substring(0, colonIndex);
+                        var path = url.Substring(colonIndex + 1);
+                        
+                        // Remove .git suffix if present
+                        if (path.EndsWith(".git"))
+                        {
+                            path = path.Substring(0, path.Length - 4);
+                        }
+                        
+                        url = $"https://{host}/{path}";
+                    }
+                }
+                return url;
+            }
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[yellow]⚠️  Could not get repository URL: {ex.Message}[/]");
+        }
+        return null;
+    }
+    
+    private RepositoryInfo GetRepositoryInfo()
+    {
+        var info = new RepositoryInfo();
+        
+        try
+        {
+            // Method 1: From remote origin URL (most reliable)
+            var origin = _repo.Network.Remotes.FirstOrDefault(r => r.Name == "origin");
+            if (origin?.Url != null)
+            {
+                info.Url = origin.Url;
+                info.Name = ExtractRepoNameFromUrl(origin.Url);
+                info.DisplayName = GenerateDisplayNameFromUrl(origin.Url);
+                info.Host = ExtractHostFromUrl(origin.Url);
+            }
+            
+            // Method 2: From working directory name (fallback)
+            if (string.IsNullOrEmpty(info.Name))
+            {
+                info.Name = Path.GetFileName(_repo.Info.WorkingDirectory);
+            }
+            
+            // Method 3: From git config (additional info)
+            try
+            {
+                var config = _repo.Config;
+                var repoName = config.Get<string>("remote.origin.url")?.Value;
+                if (!string.IsNullOrEmpty(repoName) && string.IsNullOrEmpty(info.Name))
+                {
+                    info.Name = ExtractRepoNameFromUrl(repoName);
+                }
+            }
+            catch
+            {
+                // Ignore config errors
+            }
+            
+            // Convert SSH URLs to HTTPS for display
+            if (!string.IsNullOrEmpty(info.Url) && info.Url.StartsWith("git@"))
+            {
+                info.HttpsUrl = ConvertSshToHttps(info.Url);
+            }
+            else
+            {
+                info.HttpsUrl = info.Url;
+            }
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[yellow]⚠️  Could not get repository info: {ex.Message}[/]");
+        }
+        
+        return info;
+    }
+    
+    private static string? ExtractRepoNameFromUrl(string url)
+    {
+        if (string.IsNullOrEmpty(url)) return null;
+        
+        // Remove .git suffix
+        var cleanUrl = url.Replace(".git", "");
+        
+        // Handle SSH format: git@host:owner/repo
+        if (cleanUrl.StartsWith("git@"))
+        {
+            var parts = cleanUrl.Substring(4).Split(':');
+            if (parts.Length == 2)
+            {
+                var pathParts = parts[1].Split('/');
+                return pathParts[^1]; // Last part is the repo name
+            }
+        }
+        
+        // Handle HTTPS format: https://host/owner/repo
+        if (cleanUrl.StartsWith("http"))
+        {
+            var uri = new Uri(cleanUrl);
+            var pathParts = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (pathParts.Length >= 2)
+            {
+                return pathParts[^1]; // Last part is the repo name
+            }
+        }
+        
+        return null;
+    }
+    
+    private static string? GenerateDisplayNameFromUrl(string url)
+    {
+        if (string.IsNullOrEmpty(url)) return null;
+        
+        // Remove .git suffix
+        var cleanUrl = url.Replace(".git", "");
+        
+        string? path = null;
+        
+        // Handle SSH format: git@host:owner/repo
+        if (cleanUrl.StartsWith("git@"))
+        {
+            var parts = cleanUrl.Substring(4).Split(':');
+            if (parts.Length == 2)
+            {
+                path = parts[1];
+            }
+        }
+        
+        // Handle HTTPS format: https://host/owner/repo
+        if (cleanUrl.StartsWith("http"))
+        {
+            var uri = new Uri(cleanUrl);
+            path = uri.AbsolutePath.TrimStart('/');
+        }
+        
+        if (string.IsNullOrEmpty(path)) return null;
+        
+        // Convert path to display name
+        // Example: hsa-share/common/share-common-workflow -> HSA SHARE Common Workflow
+        var pathParts = path.Split('/');
+        var displayParts = new List<string>();
+        
+        foreach (var part in pathParts)
+        {
+            if (string.IsNullOrEmpty(part)) continue;
+            
+            // Handle kebab-case (e.g., share-common-workflow)
+            var words = part.Split('-');
+            var titleWords = words.Select(word => 
+            {
+                if (string.IsNullOrEmpty(word)) return word;
+                
+                // Handle acronyms (e.g., HSA, PDF, API)
+                if (word.All(char.IsUpper) && word.Length <= 5)
+                {
+                    return word;
+                }
+                
+                // Title case for regular words
+                return char.ToUpper(word[0]) + word.Substring(1).ToLower();
+            });
+            
+            displayParts.AddRange(titleWords);
+        }
+        
+        // Remove duplicates while preserving order
+        var uniqueParts = new List<string>();
+        foreach (var part in displayParts)
+        {
+            if (!uniqueParts.Contains(part, StringComparer.OrdinalIgnoreCase))
+            {
+                uniqueParts.Add(part);
+            }
+        }
+        
+        return string.Join(" ", uniqueParts);
+    }
+    
+    private static string? ExtractHostFromUrl(string url)
+    {
+        if (string.IsNullOrEmpty(url)) return null;
+        
+        // Handle SSH format: git@host:owner/repo
+        if (url.StartsWith("git@"))
+        {
+            var parts = url.Substring(4).Split(':');
+            if (parts.Length == 2)
+            {
+                return parts[0];
+            }
+        }
+        
+        // Handle HTTPS format: https://host/owner/repo
+        if (url.StartsWith("http"))
+        {
+            var uri = new Uri(url);
+            return uri.Host;
+        }
+        
+        return null;
+    }
+    
+    private static string? ConvertSshToHttps(string sshUrl)
+    {
+        if (string.IsNullOrEmpty(sshUrl) || !sshUrl.StartsWith("git@"))
+            return sshUrl;
+            
+        // Convert git@host:owner/repo.git to https://host/owner/repo
+        var url = sshUrl.Substring(4); // Remove "git@"
+        var colonIndex = url.IndexOf(':');
+        if (colonIndex > 0)
+        {
+            var host = url.Substring(0, colonIndex);
+            var path = url.Substring(colonIndex + 1);
+            
+            // Remove .git suffix if present
+            if (path.EndsWith(".git"))
+            {
+                path = path.Substring(0, path.Length - 4);
+            }
+            
+            return $"https://{host}/{path}";
+        }
+        
+        return sshUrl;
+    }
+    
+    public class RepositoryInfo
+    {
+        public string? Name { get; set; }           // Short name (e.g., "share-common-workflow")
+        public string? DisplayName { get; set; }    // Human-readable name (e.g., "HSA SHARE Common Share Common Workflow")
+        public string? Url { get; set; }            // Original URL (SSH or HTTPS)
+        public string? HttpsUrl { get; set; }       // Converted HTTPS URL
+        public string? Host { get; set; }           // Host (e.g., "git.tsp.dev")
     }
 
     private static string GetStatusIcon(string status)

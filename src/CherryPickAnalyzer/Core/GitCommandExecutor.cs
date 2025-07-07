@@ -19,16 +19,49 @@ public class GitCommandExecutor(string repoPath)
                 var task = ctx.AddTask($"[green]Fetching from {remote}[/]");
                 task.IsIndeterminate = true;
 
-                var result = await _gitCommand
-                    .WithArguments($"fetch {remote}")
-                    .ExecuteBufferedAsync(cancellationToken);
-
-                if (result.ExitCode != 0)
+                try
                 {
-                    throw new GitCommandException($"Failed to fetch: {result.StandardError}");
-                }
+                    // Use Process.Start to run Git in a new console window for interactive input
+                    var processInfo = new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "git",
+                        Arguments = $"fetch {remote}",
+                        WorkingDirectory = repoPath,
+                        UseShellExecute = false,
+                        RedirectStandardInput = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
+                    };
 
-                task.Value = 100;
+                    AnsiConsole.MarkupLine($"[blue]🔄 Opening Git console for interactive authentication...[/]");
+                    AnsiConsole.MarkupLine($"[dim]A new console window will open. Please authenticate there and close it when done.[/]");
+                    
+                    var process = System.Diagnostics.Process.Start(processInfo);
+                    if (process != null)
+                    {
+                        await process.WaitForExitAsync(cancellationToken);
+                        
+                        if (process.ExitCode != 0)
+                        {
+                            AnsiConsole.MarkupLine($"[yellow]⚠️  Git fetch completed with exit code: {process.ExitCode}[/]");
+                            AnsiConsole.MarkupLine($"[blue]💡 If authentication failed, please try again.[/]");
+                        }
+                        else
+                        {
+                            AnsiConsole.MarkupLine($"[green]✅ Git fetch completed successfully![/]");
+                        }
+                    }
+
+                    // Note: Exit code handling is now done above in the process.WaitForExitAsync section
+
+                    task.Value = 100;
+                }
+                catch (Exception ex) when (ex.Message.Contains("authentication") || ex.Message.Contains("password"))
+                {
+                    AnsiConsole.MarkupLine($"[red]❌ Authentication required for remote '{remote}'[/]");
+                    AnsiConsole.MarkupLine($"[blue]💡 Please run 'git fetch {remote}' manually to authenticate, then try again.[/]");
+                    throw;
+                }
             });
     }
 

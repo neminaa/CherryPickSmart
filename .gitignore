@@ -46,3 +46,4 @@ coverage/
 # Ignore local secrets
 secrets.json
 .vs/gp/CopilotIndices/17.14.698.11175/CodeChunks.db
+/src/CherryPickAnalyzer/reports

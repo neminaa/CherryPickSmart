@@ -8,15 +8,7 @@ using Spectre.Console;
 return await Parser.Default.ParseArguments<AnalyzeOptions>(args)
     .MapResult(
         RunAnalyzeAsync,
-        errs =>
-        {
-            AnsiConsole.MarkupLine("[red]Error parsing command line arguments:[/]");
-            foreach (var err in errs)
-            {
-                AnsiConsole.MarkupLine($"  - {Markup.Escape(err.Tag.ToString())}");
-            }
-            return Task.FromResult(1);
-        });
+        _ => Task.FromResult(1));
 
 
 

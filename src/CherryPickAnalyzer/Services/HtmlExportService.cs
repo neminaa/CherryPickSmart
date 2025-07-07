@@ -20,6 +20,7 @@ public partial class HtmlExportService
         .header h1 { font-size: 2.2em; font-weight: 700; display: flex; align-items: center; gap: 0.5em; margin: 0 0 16px 0; }
         .header .icon { font-size: 1.3em; }
         .header p { margin: 4px 0; color: #64748b; }
+        .header .repo-name { margin: 8px 0; color: #2563eb; font-size: 1.1em; }
         .summary { display: flex; gap: 32px; margin-bottom: 36px; flex-wrap: wrap; }
         .summary-card { background: #fff; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); padding: 24px 32px; flex: 1 1 180px; display: flex; flex-direction: column; align-items: center; min-width: 180px; }
         .summary-card .icon { font-size: 2em; margin-bottom: 8px; }
@@ -42,6 +43,30 @@ public partial class HtmlExportService
         }
         .filter-btn:hover { background: #f3f4f6; }
         .filter-btn.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+        
+        /* Results summary */
+        .results-summary {
+            display: flex;
+            gap: 24px;
+            margin-bottom: 16px;
+            padding: 12px 16px;
+            background: #f8fafc;
+            border-radius: 8px;
+            border-left: 3px solid #3b82f6;
+        }
+        .summary-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .summary-item .label {
+            font-weight: 500;
+            color: #374151;
+        }
+        .summary-item .value {
+            font-weight: 600;
+            color: #2563eb;
+        }
         
         /* Selection buttons */
         .selection-controls {
@@ -109,6 +134,12 @@ public partial class HtmlExportService
         .commit .message { flex: 1; }
         .commit.child { margin-left: 32px; background: #f3f4f6; }
         
+        /* Link styling */
+        .commit a.sha:hover, .ticket-key.name:hover, .repo-name a:hover { 
+            text-decoration: underline !important; 
+            color: #1d4ed8 !important; 
+        }
+        
         .dependencies { margin-top: 16px; padding: 12px; background: #f8fafc; border-radius: 6px; border-left: 3px solid #3b82f6; }
         .dependencies h4 { margin: 0 0 8px 0; font-size: 0.9em; color: #374151; }
         .dependency-list { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -131,6 +162,11 @@ public partial class HtmlExportService
             display: flex;
             align-items: center;
             gap: 8px;
+        }
+        .command-count {
+            font-size: 0.8em;
+            color: #64748b;
+            font-weight: 400;
         }
         .command-list {
             background: #1e293b;
@@ -159,13 +195,41 @@ public partial class HtmlExportService
         }
         .copy-btn:hover { background: #1d4ed8; }
         .copy-btn:active { transform: translateY(1px); }
+
+        .dependency-warning {
+            background: #fffbe6;
+            color: #b45309;
+            border: 1px solid #fde68a;
+            border-radius: 8px;
+            padding: 16px 20px;
+            margin-bottom: 24px;
+            font-size: 1.05em;
+            box-shadow: 0 2px 8px rgba(255, 193, 7, 0.08);
+        }
+        .dependency-warning strong {
+            color: #92400e;
+        }
+        .dependency-warning ul {
+            margin: 8px 0 0 24px;
+        }
     </style>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/list.js/2.3.1/list.min.js"></script>
+    <!-- Removed List.js - using custom filtering and pagination -->
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1><span class="icon">🍒</span> Cherry-Pick Analysis</h1>
+            {{ if repository_name }}
+            <p class="repo-name">
+                {{ if repository_url }}
+                    <a href="{{ repository_url }}" target="_blank" style="text-decoration: none; color: #2563eb;">
+                        <strong>📦 {{ repository_name }}</strong>
+                    </a>
+                {{ else }}
+                    <strong>📦 {{ repository_name }}</strong>
+                {{ end }}
+            </p>
+            {{ end }}
             <p><strong>{{ source_branch }}</strong> → <strong>{{ target_branch }}</strong></p>
             <p>Generated on {{ generated_date }}</p>
         </div>
@@ -194,36 +258,48 @@ public partial class HtmlExportService
         </div>
         
         <div class="search-panel">
-            <input class="search" placeholder="Search tickets, status, summary..." />
+            <input class="search" placeholder="Search tickets, status, summary, commit SHAs, messages..." />
         </div>
         
         <div class="selection-controls">
             <button class="selection-btn" onclick="selectAll()">Select All</button>
-            <button class="selection-btn" onclick="selectReady()">Select Ready</button>
             <button class="selection-btn" onclick="clearSelection()">Clear Selection</button>
         </div>
         
         <div class="filter-bar" id="filter-bar">
             <button class="filter-btn active" data-status="all">All</button>
             {{ for status in available_statuses }}
-            {{ if status.name != "No Ticket" }}
-            <button class="filter-btn" data-status="{{ status.name | string.downcase }}">
-                <span>{{ status.icon }}</span> {{ status.name }} ({{ status.count }})
+            <button class="filter-btn" data-status="{{ status.name }}">
+                <span>{{ status.icon }}</span> {{ status.display_name }} ({{ status.count }})
             </button>
             {{ end }}
-            {{ end }}
+        </div>
+        
+        <div class="results-summary" id="results-summary">
+            <div class="summary-item">
+                <span class="label">Showing:</span>
+                <span class="value" id="showing-count">{{ ticket_groups.size }} tickets</span>
+            </div>
+            <div class="summary-item">
+                <span class="label">Selected:</span>
+                <span class="value" id="selected-count">0 tickets</span>
+            </div>
         </div>
         
         <div id="ticket-list">
             <div class="list ticket-groups">
                 {{ for ticket in ticket_groups }}
-                <div class="ticket-card" id="ticket-{{ ticket.ticket_number }}" data-status="{{ ticket.jira_info ? (ticket.jira_info.status | string.downcase) : 'no-ticket' }}" data-ticket="{{ ticket.ticket_number }}">
+                <div class="ticket-card" id="ticket-{{ ticket.ticket_number }}" data-status="{{ ticket.jira_info ? (ticket.jira_info.status | string.downcase | string.replace ' ' '-') : 'no-ticket' }}" data-ticket="{{ ticket.ticket_number }}">
                     <div class="ticket-checkbox-outer">
                         <input type="checkbox" class="ticket-checkbox ticket-level" data-ticket="{{ ticket.ticket_number }}" onchange="handleTicketCheckboxChange(this)" />
                     </div>
                     <div class="ticket-content">
                         <div class="ticket-header">
-                            <span class="ticket-key name">{{ ticket.ticket_number }}</span>
+                            {{ if ticket.jira_link }}
+                                <a href="{{ ticket.jira_link }}" target="_blank" class="ticket-key name" style="text-decoration: none; color: #2563eb;">{{ ticket.ticket_number }}</a>
+                            {{ else }}
+                                <span class="ticket-key name">{{ ticket.ticket_number }}</span>
+                            {{ end }}
                             {{ if ticket.jira_info }}
                                 <span class="status-badge status" style="background: {{ ticket.status_color }}; color: #fff;">{{ ticket.jira_info.status }}</span>
                             {{ end }}
@@ -238,7 +314,7 @@ public partial class HtmlExportService
                             <h4>🔗 Dependencies (required first):</h4>
                             <div class="dependency-list">
                                 {{ for dep in ticket.dependencies }}
-                                <div class="dependency-item" onclick="scrollToTicket('{{ dep.ticket_number }}')" style="background: {{ dep.status_color }}20; color: {{ dep.status_color }};">
+                                <div class="dependency-item" data-ticket="{{ dep.ticket_number }}" onclick="scrollToTicket('{{ dep.ticket_number }}')" style="background: {{ dep.status_color }}20; color: {{ dep.status_color }};">
                                     {{ dep.ticket_number }} ({{ dep.status }})
                                 </div>
                                 {{ end }}
@@ -261,19 +337,29 @@ public partial class HtmlExportService
                             <div class="mr-block">
                                 <div class="commit mr-commit">
                                     <input type="checkbox" class="mr-checkbox" data-ticket="{{ ticket.ticket_number }}" data-mr="{{ mr.merge_commit.short_sha }}" onchange="handleMrCheckboxChange(this)" />
-                                    {{ if mr.merge_commit.status != "Unknown" }}
-                                    <span class="status-badge" style="background: {{ mr.merge_commit.status_color }}; color: #fff; margin-right: 8px;">{{ mr.merge_commit.status }}</span>
-                                    {{ end }}
-                                    <div class="row1"><span class="icon">🔀</span><span class="sha">{{ mr.merge_commit.short_sha }}</span><span class="message">{{ mr.merge_commit.message }}</span></div>
+                                    <div class="row1">
+                                        <span class="icon">🔀</span>
+                                        {{ if mr.merge_commit.commit_link }}
+                                            <a href="{{ mr.merge_commit.commit_link }}" target="_blank" class="sha" style="text-decoration: none; color: #2563eb;">{{ mr.merge_commit.short_sha }}</a>
+                                        {{ else }}
+                                            <span class="sha">{{ mr.merge_commit.short_sha }}</span>
+                                        {{ end }}
+                                        <span class="message">{{ mr.merge_commit.message }}</span>
+                                    </div>
                                     <div class="row2"><span class="author">{{ mr.merge_commit.author }}</span> | <span class="date">{{ mr.merge_commit.date }}</span></div>
                                 </div>
                                 {{ for commit in mr.mr_commits }}
                                 <div class="commit child">
                                     <input type="checkbox" class="commit-checkbox" data-ticket="{{ ticket.ticket_number }}" data-mr="{{ mr.merge_commit.short_sha }}" data-commit="{{ commit.short_sha }}" onchange="handleCommitCheckboxChange(this)" />
-                                    {{ if commit.status != "Unknown" }}
-                                    <span class="status-badge" style="background: {{ commit.status_color }}; color: #fff; margin-right: 8px;">{{ commit.status }}</span>
-                                    {{ end }}
-                                    <div class="row1"><span class="icon">📝</span><span class="sha">{{ commit.short_sha }}</span><span class="message">{{ commit.message }}</span></div>
+                                    <div class="row1">
+                                        <span class="icon">📝</span>
+                                        {{ if commit.commit_link }}
+                                            <a href="{{ commit.commit_link }}" target="_blank" class="sha" style="text-decoration: none; color: #2563eb;">{{ commit.short_sha }}</a>
+                                        {{ else }}
+                                            <span class="sha">{{ commit.short_sha }}</span>
+                                        {{ end }}
+                                        <span class="message">{{ commit.message }}</span>
+                                    </div>
                                     <div class="row2"><span class="author">{{ commit.author }}</span> | <span class="date">{{ commit.date }}</span></div>
                                 </div>
                                 {{ end }}
@@ -282,10 +368,15 @@ public partial class HtmlExportService
                             {{ for commit in ticket.standalone_commits }}
                             <div class="commit">
                                 <input type="checkbox" class="commit-checkbox" data-ticket="{{ ticket.ticket_number }}" data-commit="{{ commit.short_sha }}" onchange="handleCommitCheckboxChange(this)" />
-                                {{ if commit.status != "Unknown" }}
-                                <span class="status-badge" style="background: {{ commit.status_color }}; color: #fff; margin-right: 8px;">{{ commit.status }}</span>
-                                {{ end }}
-                                <div class="row1"><span class="icon">📝</span><span class="sha">{{ commit.short_sha }}</span><span class="message">{{ commit.message }}</span></div>
+                                <div class="row1">
+                                    <span class="icon">📝</span>
+                                    {{ if commit.commit_link }}
+                                        <a href="{{ commit.commit_link }}" target="_blank" class="sha" style="text-decoration: none; color: #2563eb;">{{ commit.short_sha }}</a>
+                                    {{ else }}
+                                        <span class="sha">{{ commit.short_sha }}</span>
+                                    {{ end }}
+                                    <span class="message">{{ commit.message }}</span>
+                                </div>
                                 <div class="row2"><span class="author">{{ commit.author }}</span> | <span class="date">{{ commit.date }}</span></div>
                             </div>
                             {{ end }}
@@ -297,8 +388,10 @@ public partial class HtmlExportService
             <ul class="pagination"></ul>
         </div>
         
+        <div id="dependency-warning" class="dependency-warning" style="display:none;"></div>
+
         <div class="commands-panel">
-            <h3>🍒 Cherry-Pick Commands</h3>
+            <h3>🍒 Cherry-Pick Commands <span class="command-count" id="command-count">(0 commands)</span></h3>
             <div class="command-list" id="commands">Select tickets above to generate cherry-pick commands</div>
             <button onclick="copyCommands()" class="copy-btn">Copy Commands</button>
         </div>
@@ -401,45 +494,51 @@ public partial class HtmlExportService
 
         // --- Bulk Actions ---
         function selectAll() {
-            document.querySelectorAll('.ticket-card').forEach(card => {
-                if (card.style.display !== 'none') {
-                    const ticketCheckbox = card.querySelector('.ticket-level');
-                    if (ticketCheckbox) {
-                        ticketCheckbox.checked = true;
-                        handleTicketCheckboxChange(ticketCheckbox);
-                    }
+            // Select all checkboxes for all filtered tickets (not just visible ones)
+            filteredTickets.forEach(card => {
+                const ticketCheckbox = card.querySelector('.ticket-level');
+                if (ticketCheckbox && !ticketCheckbox.checked) {
+                    ticketCheckbox.checked = true;
+                    handleTicketCheckboxChange(ticketCheckbox);
                 }
             });
+            
+            // Update commands and warnings after selecting all
+            updateCommands();
         }
         function clearSelection() {
-            document.querySelectorAll('.ticket-card').forEach(card => {
-                if (card.style.display !== 'none') {
-                    const ticketCheckbox = card.querySelector('.ticket-level');
-                    if (ticketCheckbox) {
-                        ticketCheckbox.checked = false;
-                        handleTicketCheckboxChange(ticketCheckbox);
-                    }
+            // Uncheck all checkboxes for all filtered tickets (not just visible ones)
+            filteredTickets.forEach(card => {
+                const ticketCheckbox = card.querySelector('.ticket-level');
+                if (ticketCheckbox && ticketCheckbox.checked) {
+                    ticketCheckbox.checked = false;
+                    handleTicketCheckboxChange(ticketCheckbox);
                 }
             });
+            
+            // Clear the commands section and hide the warning
+            const commandsEl = document.getElementById('commands');
+            if (commandsEl) {
+                commandsEl.textContent = 'Select tickets above to generate cherry-pick commands';
+            }
+            
+            // Update command count to show 0
+            updateCommandCount(0);
+            
+            // Clear the dependency warning
+            const warningEl = document.getElementById('dependency-warning');
+            if (warningEl) {
+                warningEl.innerHTML = '';
+                warningEl.style.display = 'none';
+            }
+            
+            // Update selected count to show 0
+            const selectedCountEl = document.getElementById('selected-count');
+            if (selectedCountEl) {
+                selectedCountEl.textContent = '0 tickets';
+            }
         }
-        function selectReady() {
-            document.querySelectorAll('.ticket-card').forEach(card => {
-                if (card.style.display !== 'none') {
-                    const status = card.querySelector('.status');
-                    const ticketCheckbox = card.querySelector('.ticket-level');
-                    if (status && ticketCheckbox) {
-                        const statusText = status.textContent.toLowerCase();
-                        if (statusText.includes('done') || statusText.includes('deployed') || statusText.includes('ready')) {
-                            ticketCheckbox.checked = true;
-                            handleTicketCheckboxChange(ticketCheckbox);
-                        } else {
-                            ticketCheckbox.checked = false;
-                            handleTicketCheckboxChange(ticketCheckbox);
-                        }
-                    }
-                }
-            });
-        }
+
 
         // --- Filter/Search State Preservation ---
         // (No-op: selection state is in JS, checkboxes reflect it on DOM update)
@@ -450,56 +549,170 @@ public partial class HtmlExportService
             let commands = ['git checkout {{ target_branch }}'];
             let selectedItems = [];
             let selectedMrShas = new Set();
+            let selectedTicketNumbers = new Set();
 
-            // First, collect all checked MRs
+            // Collect all checked ticket numbers
+            document.querySelectorAll('.ticket-level:checked').forEach(cb => {
+                selectedTicketNumbers.add(cb.dataset.ticket);
+            });
+
+            // Collect all checked MRs not under a selected ticket
             document.querySelectorAll('.mr-checkbox:checked').forEach(cb => {
-                selectedMrShas.add(cb.dataset.mr);
-            });
-
-            // Then, collect all checked MR and commit checkboxes in DOM order
-            document.querySelectorAll('.mr-checkbox:checked, .commit-checkbox:checked').forEach(cb => {
-                let sha, type, ticket, message, parentMr;
-                if (cb.classList.contains('mr-checkbox')) {
-                    sha = cb.dataset.mr;
-                    type = 'mr';
-                    parentMr = null;
-                } else {
-                    sha = cb.dataset.commit;
-                    type = 'commit';
-                    parentMr = cb.dataset.mr || null;
-                }
-                // If this is a commit and its parent MR is selected, skip it
-                if (type === 'commit' && parentMr && selectedMrShas.has(parentMr)) return;
-
-                // Find parent ticket card
-                const card = cb.closest('.ticket-card');
-                ticket = card ? card.dataset.ticket : '';
-                // Find commit message
-                const msgEl = cb.parentElement.querySelector('.message');
-                message = msgEl ? msgEl.textContent.trim() : '';
-                selectedItems.push({sha, type, ticket, message});
-            });
-
-            // Remove duplicates
-            const seen = new Set();
-            selectedItems = selectedItems.filter(item => {
-                if (seen.has(item.sha)) return false;
-                seen.add(item.sha);
-                return true;
-            });
-
-            // Build commands with comments
-            selectedItems.forEach(item => {
-                if (item.sha) {
-                    commands.push(`# ${item.ticket}: ${item.message}`);
-                    if (item.type === 'mr') {
-                        commands.push(`git cherry-pick -m 1 ${item.sha}`);
-                    } else {
-                        commands.push(`git cherry-pick ${item.sha}`);
-                    }
+                const ticket = cb.dataset.ticket;
+                if (!selectedTicketNumbers.has(ticket)) {
+                    selectedMrShas.add(cb.dataset.mr);
                 }
             });
+
+            // Group selected items by ticket
+            let ticketGroups = {};
+
+            // Add selected tickets (all MRs/commits under them are implicitly selected)
+            selectedTicketNumbers.forEach(ticket => {
+                if (!ticketGroups[ticket]) ticketGroups[ticket] = {mrs: [], commits: []};
+                // Add all checked MRs under this ticket
+                document.querySelectorAll(`.mr-checkbox[data-ticket='${ticket}']`).forEach(cb => {
+                    ticketGroups[ticket].mrs.push(cb.dataset.mr);
+                });
+                // Add all checked commits under this ticket
+                document.querySelectorAll(`.commit-checkbox[data-ticket='${ticket}']`).forEach(cb => {
+                    ticketGroups[ticket].commits.push(cb.dataset.commit);
+                });
+            });
+
+            // Add selected MRs (not under a selected ticket)
+            selectedMrShas.forEach(mrSha => {
+                const cb = document.querySelector(`.mr-checkbox[data-mr='${mrSha}']`);
+                if (!cb) return;
+                const ticket = cb.dataset.ticket;
+                if (!ticketGroups[ticket]) ticketGroups[ticket] = {mrs: [], commits: []};
+                ticketGroups[ticket].mrs.push(mrSha);
+                // Add all checked commits under this MR (not under a selected ticket)
+                document.querySelectorAll(`.commit-checkbox[data-mr='${mrSha}'][data-ticket='${ticket}']`).forEach(commitCb => {
+                    ticketGroups[ticket].commits.push(commitCb.dataset.commit);
+                });
+            });
+
+            // Add selected commits (not under a selected ticket or selected MR)
+            document.querySelectorAll('.commit-checkbox:checked').forEach(cb => {
+                const ticket = cb.dataset.ticket;
+                const mr = cb.dataset.mr;
+                if (!selectedTicketNumbers.has(ticket) && (!mr || !selectedMrShas.has(mr))) {
+                    if (!ticketGroups[ticket]) ticketGroups[ticket] = {mrs: [], commits: []};
+                    ticketGroups[ticket].commits.push(cb.dataset.commit);
+                }
+            });
+
+            // Now, for each ticket, output the header and commands
+            let ticketIndex = 1;
+            Object.keys(ticketGroups).sort().forEach(ticket => {
+                const group = ticketGroups[ticket];
+                // Remove duplicates
+                group.mrs = [...new Set(group.mrs)];
+                group.commits = [...new Set(group.commits)];
+                // Header
+                const visibleCommits = group.commits.filter(commitSha => {
+                    const cb = document.querySelector(`.commit-checkbox[data-commit='${commitSha}'][data-ticket='${ticket}']`);
+                    if (!cb) return false;
+                    const parentMr = cb.dataset.mr;
+                    if (parentMr && group.mrs.includes(parentMr)) return false;
+                    return true;
+                });
+                commands.push(`# ${ticketIndex} ${ticket} (${group.mrs.length} MR${group.mrs.length !== 1 ? 's' : ''}, ${visibleCommits.length} commit${visibleCommits.length !== 1 ? 's' : ''})`);
+                // For each MR, output the cherry-pick command
+                group.mrs.forEach(mrSha => {
+                    const cb = document.querySelector(`.mr-checkbox[data-mr='${mrSha}']`);
+                    if (!cb) return;
+                    const card = cb.closest('.ticket-card');
+                    const ticketNum = card ? card.dataset.ticket : '';
+                    const msgEl = cb.parentElement.querySelector('.message');
+                    const message = msgEl ? msgEl.textContent.trim() : '';
+                    commands.push(`# ${ticketNum}: ${message}`);
+                    commands.push(`git cherry-pick -m 1 ${mrSha}`);
+                });
+                // For each commit, output the cherry-pick command
+                visibleCommits.forEach(commitSha => {
+                    const cb = document.querySelector(`.commit-checkbox[data-commit='${commitSha}'][data-ticket='${ticket}']`);
+                    if (!cb) return;
+                    const card = cb.closest('.ticket-card');
+                    const ticketNum = card ? card.dataset.ticket : '';
+                    const msgEl = cb.parentElement.querySelector('.message');
+                    const message = msgEl ? msgEl.textContent.trim() : '';
+                    const parentMr = cb.dataset.mr;
+                    if (parentMr && group.mrs.includes(parentMr)) return;
+                    commands.push(`# ${ticketNum}: ${message}`);
+                    commands.push(`git cherry-pick ${commitSha}`);
+                });
+                ticketIndex++;
+                commands.push(''); // Blank line between tickets
+            });
+
             commandsEl.textContent = commands.join('\n');
+            
+            // Update command count
+            let totalCommands = 0;
+            Object.keys(ticketGroups).forEach(ticket => {
+                const group = ticketGroups[ticket];
+                const visibleCommits = group.commits.filter(commitSha => {
+                    const cb = document.querySelector(`.commit-checkbox[data-commit='${commitSha}'][data-ticket='${ticket}']`);
+                    if (!cb) return false;
+                    const parentMr = cb.dataset.mr;
+                    if (parentMr && group.mrs.includes(parentMr)) return false;
+                    return true;
+                });
+                totalCommands += group.mrs.length + visibleCommits.length;
+            });
+            updateCommandCount(totalCommands);
+            
+            // Update selected count
+            updateSelectedCount();
+
+            updateDependencyWarning();
+        }
+        
+        function updateCommandCount(count) {
+            const commandCountEl = document.getElementById('command-count');
+            if (commandCountEl) {
+                commandCountEl.textContent = `(${count} command${count !== 1 ? 's' : ''})`;
+            }
+        }
+        
+        function updateSelectedCount() {
+            const selectedCountEl = document.getElementById('selected-count');
+            if (!selectedCountEl) return;
+
+            // Get all checked ticket numbers
+            const selectedTicketNumbers = new Set(
+                Array.from(document.querySelectorAll('.ticket-level:checked')).map(cb => cb.dataset.ticket)
+            );
+
+            // Get all checked MR shas (that are not under a selected ticket)
+            const selectedMrShas = new Set();
+            document.querySelectorAll('.mr-checkbox:checked').forEach(cb => {
+                const ticket = cb.dataset.ticket;
+                if (!selectedTicketNumbers.has(ticket)) {
+                    selectedMrShas.add(cb.dataset.mr);
+                }
+            });
+
+            // Get all checked commits (that are not under a selected ticket or selected MR)
+            let selectedCommitCount = 0;
+            document.querySelectorAll('.commit-checkbox:checked').forEach(cb => {
+                const ticket = cb.dataset.ticket;
+                const mr = cb.dataset.mr;
+                if (!selectedTicketNumbers.has(ticket) && (!mr || !selectedMrShas.has(mr))) {
+                    selectedCommitCount++;
+                }
+            });
+
+            const ticketCount = selectedTicketNumbers.size;
+            const mrCount = selectedMrShas.size;
+            const commitCount = selectedCommitCount;
+
+            selectedCountEl.textContent =
+                `${ticketCount} ticket${ticketCount !== 1 ? 's' : ''}, ` +
+                `${mrCount} MR${mrCount !== 1 ? 's' : ''}, ` +
+                `${commitCount} commit${commitCount !== 1 ? 's' : ''}`;
         }
 
         // --- Multi-Filter Selection Logic ---
@@ -515,48 +728,313 @@ public partial class HtmlExportService
             });
         }
         function applyFilters() {
-            document.querySelectorAll('.ticket-card').forEach(card => {
-                const status = (card.getAttribute('data-status') || '').toLowerCase();
-                if (activeFilters.size === 0 || Array.from(activeFilters).some(f => f.toLowerCase() === status)) {
-                    card.style.display = '';
-                } else {
-                    card.style.display = 'none';
-                }
-            });
+            // This function is now handled by applySearchAndFilters()
+            applySearchAndFilters();
         }
-        document.querySelectorAll('.filter-btn').forEach(btn => {
-            btn.addEventListener('click', function() {
-                const status = btn.getAttribute('data-status');
-                if (status === 'all') {
-                    activeFilters.clear();
-                } else {
-                    if (activeFilters.has(status)) {
-                        activeFilters.delete(status);
+
+        // --- Custom Filtering and Pagination System ---
+        let currentPage = 1;
+        const itemsPerPage = 10;
+        let filteredTickets = [];
+        
+        function initializeCustomSystem() {
+            // Get all ticket cards
+            const allTickets = Array.from(document.querySelectorAll('.ticket-card'));
+            filteredTickets = allTickets;
+            
+            // Set up search functionality
+            const searchInput = document.querySelector('.search');
+            if (searchInput) {
+                searchInput.addEventListener('input', function() {
+                    applySearchAndFilters();
+                });
+            }
+            
+            // Set up filter button functionality
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const status = btn.getAttribute('data-status');
+                    if (status === 'all') {
+                        activeFilters.clear();
                     } else {
-                        activeFilters.add(status);
+                        if (activeFilters.has(status)) {
+                            activeFilters.delete(status);
+                        } else {
+                            activeFilters.add(status);
+                        }
+                    }
+                    updateFilterBar();
+                    applyFilters();
+                });
+            });
+            
+            // Initial setup
+            updateFilterBar();
+            renderPagination();
+            updateDisplay();
+        }
+        
+        function applySearchAndFilters() {
+            const searchTerm = document.querySelector('.search').value.toLowerCase();
+            const allTickets = Array.from(document.querySelectorAll('.ticket-card'));
+            
+            // Apply both search and status filters
+            filteredTickets = allTickets.filter(card => {
+                const status = (card.getAttribute('data-status') || '').toLowerCase();
+                const ticketNumber = card.querySelector('.ticket-key')?.textContent?.toLowerCase() || '';
+                const summary = card.querySelector('.ticket-summary')?.textContent?.toLowerCase() || '';
+                
+                // Check status filter
+                const statusMatch = activeFilters.size === 0 || Array.from(activeFilters).some(f => f.toLowerCase() === status);
+                
+                // Check search filter - include commit SHAs and messages
+                let searchMatch = !searchTerm || 
+                    ticketNumber.includes(searchTerm) || 
+                    summary.includes(searchTerm) ||
+                    status.includes(searchTerm);
+                
+                // If no match found in ticket info, search through commits
+                if (!searchMatch && searchTerm) {
+                    // Search through all commit SHAs and messages in this ticket
+                    const commitElements = card.querySelectorAll('.commit');
+                    for (const commitEl of commitElements) {
+                        const sha = commitEl.querySelector('.sha')?.textContent?.toLowerCase() || '';
+                        const message = commitEl.querySelector('.message')?.textContent?.toLowerCase() || '';
+                        
+                        if (sha.includes(searchTerm) || message.includes(searchTerm)) {
+                            searchMatch = true;
+                            break;
+                        }
                     }
                 }
-                updateFilterBar();
-                applyFilters();
+                
+                return statusMatch && searchMatch;
             });
-        });
-        // On load, ensure filter bar is correct
-        updateFilterBar();
-        applyFilters();
-
-        // --- List.js and Filter Integration ---
-        // (Removed List.js filter button click handlers to avoid conflicts with custom multi-filter logic)
+            
+            currentPage = 1; // Reset to first page when filtering
+            renderPagination();
+            updateDisplay();
+        }
+        
+        function updateDisplay() {
+            const allTickets = document.querySelectorAll('.ticket-card');
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const endIndex = startIndex + itemsPerPage;
+            
+            // First, hide all tickets
+            allTickets.forEach(card => {
+                card.style.display = 'none';
+            });
+            
+            // Then, show only the tickets that are in the current page of filtered results
+            filteredTickets.slice(startIndex, endIndex).forEach(card => {
+                card.style.display = '';
+            });
+            
+            // Update the "Showing" count
+            updateShowingCount();
+            updateDependencyWarning();
+        }
+        
+        function updateShowingCount() {
+            const showingCountEl = document.getElementById('showing-count');
+            if (showingCountEl) {
+                const count = filteredTickets.length;
+                showingCountEl.textContent = `${count} ticket${count !== 1 ? 's' : ''}`;
+            }
+        }
+        
+        function renderPagination() {
+            const paginationContainer = document.querySelector('.pagination');
+            if (!paginationContainer) return;
+            
+            const totalPages = Math.ceil(filteredTickets.length / itemsPerPage);
+            
+            if (totalPages <= 1) {
+                paginationContainer.innerHTML = '';
+                return;
+            }
+            
+            let paginationHTML = '';
+            
+            // Previous button
+            if (currentPage > 1) {
+                paginationHTML += `<li><a href="#" onclick="goToPage(${currentPage - 1})">← Previous</a></li>`;
+            }
+            
+            // Page numbers
+            const startPage = Math.max(1, currentPage - 2);
+            const endPage = Math.min(totalPages, currentPage + 2);
+            
+            for (let i = startPage; i <= endPage; i++) {
+                if (i === currentPage) {
+                    paginationHTML += `<li class="active"><a href="#">${i}</a></li>`;
+                } else {
+                    paginationHTML += `<li><a href="#" onclick="goToPage(${i})">${i}</a></li>`;
+                }
+            }
+            
+            // Next button
+            if (currentPage < totalPages) {
+                paginationHTML += `<li><a href="#" onclick="goToPage(${currentPage + 1})">Next →</a></li>`;
+            }
+            
+            paginationContainer.innerHTML = paginationHTML;
+        }
+        
+        function goToPage(page) {
+            currentPage = page;
+            updateDisplay();
+            renderPagination();
+        }
+        
+        // Initialize when DOM is ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initializeCustomSystem);
+        } else {
+            initializeCustomSystem();
+        }
 
         // --- Utility: Scroll to Ticket ---
         function scrollToTicket(ticketNumber) {
             const element = document.getElementById('ticket-' + ticketNumber);
+            if (!element) return;
+            
+            // Check if the ticket is currently visible (on current page)
+            const isVisible = element.style.display !== 'none';
+            
+            if (!isVisible) {
+                // Find which page this ticket is on
+                const ticketIndex = filteredTickets.findIndex(card => card.dataset.ticket === ticketNumber);
+                if (ticketIndex !== -1) {
+                    const targetPage = Math.floor(ticketIndex / itemsPerPage) + 1;
+                    if (targetPage !== currentPage) {
+                        // Navigate to the correct page first
+                        goToPage(targetPage);
+                        // Wait a bit for the page to render, then scroll
+                        setTimeout(() => {
+                            scrollToTicketOnCurrentPage(ticketNumber);
+                        }, 100);
+                        return;
+                    }
+                }
+            }
+            
+            // If we're here, the ticket is on the current page or we're already on the right page
+            scrollToTicketOnCurrentPage(ticketNumber);
+        }
+        
+        function scrollToTicketOnCurrentPage(ticketNumber) {
+            const element = document.getElementById('ticket-' + ticketNumber);
             if (element) {
                 element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                // Optionally highlight the ticket briefly
+                // Highlight the ticket briefly
                 element.style.boxShadow = '0 0 0 3px #3b82f6';
                 setTimeout(() => {
                     element.style.boxShadow = '';
                 }, 2000);
+            }
+        }
+
+        // --- Copy Commands Function ---
+        function copyCommands() {
+            const commandsEl = document.getElementById('commands');
+            const text = commandsEl.textContent;
+            
+            if (navigator.clipboard && window.isSecureContext) {
+                // Use modern clipboard API
+                navigator.clipboard.writeText(text).then(() => {
+                    const btn = document.querySelector('.copy-btn');
+                    const originalText = btn.textContent;
+                    btn.textContent = 'Copied!';
+                    btn.style.background = '#10b981';
+                    setTimeout(() => {
+                        btn.textContent = originalText;
+                        btn.style.background = '#2563eb';
+                    }, 2000);
+                }).catch(err => {
+                    console.error('Failed to copy: ', err);
+                    fallbackCopyTextToClipboard(text);
+                });
+            } else {
+                // Fallback for older browsers
+                fallbackCopyTextToClipboard(text);
+            }
+        }
+
+        function fallbackCopyTextToClipboard(text) {
+            const textArea = document.createElement('textarea');
+            textArea.value = text;
+            textArea.style.top = '0';
+            textArea.style.left = '0';
+            textArea.style.position = 'fixed';
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            
+            try {
+                const successful = document.execCommand('copy');
+                if (successful) {
+                    const btn = document.querySelector('.copy-btn');
+                    const originalText = btn.textContent;
+                    btn.textContent = 'Copied!';
+                    btn.style.background = '#10b981';
+                    setTimeout(() => {
+                        btn.textContent = originalText;
+                        btn.style.background = '#2563eb';
+                    }, 2000);
+                }
+            } catch (err) {
+                console.error('Fallback: Oops, unable to copy', err);
+            }
+            
+            document.body.removeChild(textArea);
+        }
+
+        function updateDependencyWarning() {
+            const warningEl = document.getElementById('dependency-warning');
+            if (!warningEl) return;
+
+            // Get all selected ticket numbers
+            const selectedTicketNumbers = new Set(
+                Array.from(document.querySelectorAll('.ticket-level:checked')).map(cb => cb.dataset.ticket)
+            );
+
+            // For each selected ticket, check its dependencies
+            let missingDeps = [];
+            selectedTicketNumbers.forEach(ticket => {
+                const card = document.querySelector(`.ticket-card[data-ticket='${ticket}']`);
+                if (!card) return;
+                // Find dependency items in the DOM
+                const depItems = card.querySelectorAll('.dependencies .dependency-list:not(.dependents) .dependency-item');
+                depItems.forEach(depEl => {
+                    const depTicket = depEl.dataset.ticket;
+                    if (depTicket && !selectedTicketNumbers.has(depTicket)) {
+                        missingDeps.push({ticket, dep: depTicket});
+                    }
+                });
+            });
+
+            if (missingDeps.length > 0) {
+                // Group by ticket
+                const grouped = {};
+                missingDeps.forEach(({ticket, dep}) => {
+                    if (!grouped[ticket]) grouped[ticket] = [];
+                    grouped[ticket].push(dep);
+                });
+                let html = '<strong>⚠️ Dependency Warning:</strong> Some selected tickets have dependencies that are not selected. Please select the dependencies first to avoid cherry-pick issues.';
+                html += '<ul>';
+                Object.keys(grouped).forEach(ticket => {
+                    const deps = grouped[ticket];
+                    const depLinks = deps.map(dep => `<a href="#" onclick="scrollToTicket('${dep}'); return false;" style="color:#b91c1c; text-decoration: underline; cursor: pointer;">${dep}</a>`).join(', ');
+                    html += `<li><strong>${ticket}</strong> is missing dependencies: ${depLinks}</li>`;
+                });
+                html += '</ul>';
+                warningEl.innerHTML = html;
+                warningEl.style.display = '';
+            } else {
+                warningEl.innerHTML = '';
+                warningEl.style.display = 'none';
             }
         }
     </script>
@@ -564,16 +1042,18 @@ public partial class HtmlExportService
 </html>
 """;
 
-    public static string GenerateHtml(DeploymentAnalysis analysis, string sourceBranch, string targetBranch)
+    public static string GenerateHtml(DeploymentAnalysis analysis, string sourceBranch, string targetBranch, string? repositoryUrl = null, string? jiraBaseUrl = null, string? repositoryName = null)
     {
         var template = Template.Parse(HtmlTemplate);
         
         // Prepare data for template
-        var ticketGroups = PrepareTicketGroups(analysis.ContentAnalysis.TicketGroups);
+        var ticketGroups = PrepareTicketGroups(analysis.ContentAnalysis.TicketGroups, repositoryUrl, jiraBaseUrl);
         var context = new
         {
             source_branch = sourceBranch,
             target_branch = targetBranch,
+            repository_name = repositoryName,
+            repository_url = repositoryUrl,
             generated_date = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
             ticket_groups = ticketGroups,
             ticket_groups_json = System.Text.Json.JsonSerializer.Serialize(ticketGroups),
@@ -586,7 +1066,7 @@ public partial class HtmlExportService
         return template.Render(context);
     }
     
-    private static List<object> PrepareTicketGroups(List<TicketGroup> ticketGroups)
+    private static List<object> PrepareTicketGroups(List<TicketGroup> ticketGroups, string? repositoryUrl = null, string? jiraBaseUrl = null)
     {
         var result = new List<object>();
         
@@ -612,36 +1092,43 @@ public partial class HtmlExportService
                     summary = ticketGroup.JiraInfo.Summary,
                     key = ticketGroup.JiraInfo.Key
                 } : null,
+                jira_link = ticketGroup.TicketNumber != "No Ticket" ? GenerateJiraLink(jiraBaseUrl, ticketGroup.TicketNumber) : null,
                 status_color = ticketGroup.JiraInfo != null ? GetStatusColor(ticketGroup.JiraInfo.Status) : "#6b7280",
                 merge_requests = ticketGroup.MergeRequests.Select(mr => new
                 {
                     merge_commit = new
                     {
                         short_sha = mr.MergeCommit.ShortSha,
+                        sha = mr.MergeCommit.Sha,
                         message = mr.MergeCommit.Message,
                         author = mr.MergeCommit.Author,
                         date = mr.MergeCommit.Date.ToString("yyyy-MM-dd"),
                         status = ticketGroup.JiraInfo?.Status ?? "Unknown",
-                        status_color = ticketGroup.JiraInfo != null ? GetStatusColor(ticketGroup.JiraInfo.Status) : "#6b7280"
+                        status_color = ticketGroup.JiraInfo != null ? GetStatusColor(ticketGroup.JiraInfo.Status) : "#6b7280",
+                        commit_link = GenerateCommitLink(repositoryUrl, mr.MergeCommit.Sha)
                     },
                     mr_commits = mr.MrCommits.Select(c => new
                     {
                         short_sha = c.ShortSha,
+                        sha = c.Sha,
                         message = c.Message,
                         author = c.Author,
                         date = c.Date.ToString("yyyy-MM-dd"),
                         status = ticketGroup.JiraInfo?.Status ?? "Unknown",
-                        status_color = ticketGroup.JiraInfo != null ? GetStatusColor(ticketGroup.JiraInfo.Status) : "#6b7280"
+                        status_color = ticketGroup.JiraInfo != null ? GetStatusColor(ticketGroup.JiraInfo.Status) : "#6b7280",
+                        commit_link = GenerateCommitLink(repositoryUrl, c.Sha)
                     }).ToList()
                 }).ToList(),
                 standalone_commits = ticketGroup.StandaloneCommits.Select(c => new
                 {
                     short_sha = c.ShortSha,
+                    sha = c.Sha,
                     message = c.Message,
                     author = c.Author,
                     date = c.Date.ToString("yyyy-MM-dd"),
                     status = ticketGroup.JiraInfo?.Status ?? "Unknown",
-                    status_color = ticketGroup.JiraInfo != null ? GetStatusColor(ticketGroup.JiraInfo.Status) : "#6b7280"
+                    status_color = ticketGroup.JiraInfo != null ? GetStatusColor(ticketGroup.JiraInfo.Status) : "#6b7280",
+                    commit_link = GenerateCommitLink(repositoryUrl, c.Sha)
                 }).ToList(),
                 dependencies = uniqueDependencies
                     .Where(dep => ticketLookup.ContainsKey(dep))
@@ -748,11 +1235,12 @@ public partial class HtmlExportService
             .GroupBy(tg => tg.JiraInfo!.Status)
             .Select(g => new
             {
-                name = g.Key,
+                name = NormalizeStatusForDataAttribute(g.Key),
+                display_name = g.Key,
                 icon = GetStatusIcon(g.Key),
                 count = g.Count()
             })
-            .OrderBy(s => GetStatusPriority(s.name))
+            .OrderBy(s => GetStatusPriority(s.display_name))
             .ToList<object>();
             
         // Add "No Ticket" if exists
@@ -761,7 +1249,8 @@ public partial class HtmlExportService
         {
             statuses.Add(new
             {
-                name = "No Ticket",
+                name = "no-ticket",
+                display_name = "No Ticket",
                 icon = "❓",
                 count = 1
             });
@@ -810,6 +1299,54 @@ public partial class HtmlExportService
             "closed" => 6,
             _ => 50
         };
+    }
+    
+    private static string NormalizeStatusForDataAttribute(string status)
+    {
+        if (string.IsNullOrEmpty(status) || status == "No Ticket")
+            return "no-ticket";
+        
+        // Trim whitespace, convert to lowercase, and replace spaces with hyphens for consistency
+        return status.Trim().ToLower().Replace(" ", "-");
+    }
+    
+    private static string? GenerateCommitLink(string? repositoryUrl, string commitSha)
+    {
+        if (string.IsNullOrEmpty(repositoryUrl) || string.IsNullOrEmpty(commitSha))
+            return null;
+            
+        // Handle different repository URL formats
+        if (repositoryUrl.Contains("github.com"))
+        {
+            // GitHub: https://github.com/owner/repo/commit/{sha}
+            return $"{repositoryUrl.TrimEnd('/')}/commit/{commitSha}";
+        }
+        else if (repositoryUrl.Contains("gitlab.com") || repositoryUrl.Contains("gitlab."))
+        {
+            // GitLab: https://gitlab.com/owner/repo/-/commit/{sha}
+            return $"{repositoryUrl.TrimEnd('/')}/-/commit/{commitSha}";
+        }
+        else if (repositoryUrl.Contains("dev.azure.com") || repositoryUrl.Contains("visualstudio.com"))
+        {
+            // Azure DevOps: https://dev.azure.com/org/project/_git/repo/commit/{sha}
+            return $"{repositoryUrl.TrimEnd('/')}/commit/{commitSha}";
+        }
+        else if (repositoryUrl.Contains("bitbucket.org"))
+        {
+            // Bitbucket: https://bitbucket.org/owner/repo/commits/{sha}
+            return $"{repositoryUrl.TrimEnd('/')}/commits/{commitSha}";
+        }
+        
+        // Generic fallback
+        return $"{repositoryUrl.TrimEnd('/')}/commit/{commitSha}";
+    }
+    
+    private static string? GenerateJiraLink(string? jiraBaseUrl, string ticketKey)
+    {
+        if (string.IsNullOrEmpty(jiraBaseUrl) || string.IsNullOrEmpty(ticketKey))
+            return null;
+            
+        return $"{jiraBaseUrl.TrimEnd('/')}/browse/{ticketKey}";
     }
 
     [GeneratedRegex(@"^[A-Za-z]+-\d+$")]

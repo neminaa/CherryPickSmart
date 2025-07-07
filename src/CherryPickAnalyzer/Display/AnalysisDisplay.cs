@@ -5,18 +5,15 @@ namespace CherryPickAnalyzer.Display;
 
 public class AnalysisDisplay
 {
-    public static void DisplaySuggestions(DeploymentAnalysis analysis, string targetBranch)
+    public static void DisplaySuggestions(DeploymentAnalysis analysis,string srcBranch, string targetBranch)
     {
         var suggestions = new List<string>();
 
-        if (analysis.CherryPickAnalysis.NewCommits.Count != 0)
-        {
-            suggestions.Add($"[yellow]Run cherry-pick command:[/] git-deploy cherry-pick -s deploy/dev -t {targetBranch}");
-        }
+        AnsiConsole.WriteLine();
 
         if (analysis.HasContentDifferences)
         {
-            suggestions.Add($"[blue]View detailed diff:[/] git diff {targetBranch}..deploy/dev");
+            suggestions.Add($"[blue]View detailed diff:[/] git diff {targetBranch}..{srcBranch}");
         }
 
         if (analysis.OutstandingCommits.Count == 0)
@@ -30,5 +27,7 @@ public class AnalysisDisplay
                 .Header("💡 Suggestions")
                 .BorderColor(Color.Magenta1));
         }
+        AnsiConsole.WriteLine();
+
     }
 }
